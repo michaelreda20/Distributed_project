@@ -372,7 +372,8 @@ impl RaftNode {
 
             // Spawn a task per peer with a timeout so a slow follower doesn't block leader
             let handle = tokio::spawn(async move {
-                let timeout_dur = Duration::from_millis(2000);
+                // Increase RPC timeout to account for follower disk persistence delays
+                let timeout_dur = Duration::from_millis(5000);
                 // Perform the TCP RPC inside the timeout
                 match tokio::time::timeout(timeout_dur, async {
                     // Connect and send the serialized AppendEntries
@@ -419,11 +420,26 @@ impl RaftNode {
 
                     if success {
                         let mut state = self.state.lock().await;
-                        // Match index becomes prev_idx + entries_len
-                        let new_match = prev_idx + (entries_len as u64);
-                        info!("[{}] Updating match_index/next_index for {} -> match={} next={}", self.config.server_id, peer, new_match, new_match + 1);
-                        state.match_index.insert(peer.clone(), new_match);
-                        state.next_index.insert(peer.clone(), new_match + 1);
+                        // Compute a safe new match index. Prefer follower-provided last_log_index as authoritative
+                        let inferred_match = prev_idx + (entries_len as u64);
+                        let new_match = std::cmp::max(inferred_match, last_log_index);
+                        let cur_match = state.match_index.get(&peer).copied().unwrap_or(0);
+                        if new_match > cur_match {
+                            info!("[{}] Updating match_index for {}: {} -> {}", self.config.server_id, peer, cur_match, new_match);
+                            state.match_index.insert(peer.clone(), new_match);
+                        } else {
+                            debug!("[{}] Not updating match_index for {} (cur={} new={})", self.config.server_id, peer, cur_match, new_match);
+                        }
+
+                        // Update next_index monotonically
+                        let desired_next = new_match.saturating_add(1);
+                        let cur_next = state.next_index.get(&peer).copied().unwrap_or(1);
+                        if desired_next > cur_next {
+                            info!("[{}] Updating next_index for {}: {} -> {}", self.config.server_id, peer, cur_next, desired_next);
+                            state.next_index.insert(peer.clone(), desired_next);
+                        } else {
+                            debug!("[{}] Not updating next_index for {} (cur={} desired={})", self.config.server_id, peer, cur_next, desired_next);
+                        }
 
                         // Try to advance commit_index if a majority have replicated an index
                         let last_index = state.last_log_index();
@@ -446,24 +462,29 @@ impl RaftNode {
                             }
                         }
                     } else {
-                        // Failure: use follower-provided last_log_index as a conflict hint to jump next_index
+                        // Failure: use follower-provided last_log_index as a conflict hint to adjust next_index,
+                        // but only reduce it — do not increase or overwrite a larger value.
                         let mut state = self.state.lock().await;
-                        // follower's last_log_index + 1 is a good guess for next_index
                         let suggested = last_log_index.saturating_add(1);
-                        // Ensure next_index is at least 1
-                        let new_next = if suggested == 0 { 1 } else { suggested };
-                        info!("[{}] Setting next_index[{}] -> {} based on follower hint", self.config.server_id, peer, new_next);
-                        state.next_index.insert(peer.clone(), new_next);
+                        let cur_next = state.next_index.get(&peer).copied().unwrap_or(1);
+                        if suggested < cur_next {
+                            let new_next = if suggested == 0 { 1 } else { suggested };
+                            info!("[{}] Decreasing next_index[{}] from {} -> {} based on follower hint", self.config.server_id, peer, cur_next, new_next);
+                            state.next_index.insert(peer.clone(), new_next);
+                        } else {
+                            debug!("[{}] Ignoring suggested next_index {} for {} because current is {}", self.config.server_id, suggested, peer, cur_next);
+                        }
                     }
                 }
                 Ok(Ok((_peer, _other, _pidx, _elen))) => {
                     // unexpected message type; ignore
                 }
                 Ok(Err(e)) => {
-                    debug!("[{}] AppendEntries task failed: {}", self.config.server_id, e);
+                    // Print errors/timeouts from individual RPC tasks so they are visible in tests
+                    println!("[{}] AppendEntries task failed: {}", self.config.server_id, e);
                 }
                 Err(e) => {
-                    debug!("[{}] Join error for AppendEntries task: {}", self.config.server_id, e);
+                    println!("[{}] Join error for AppendEntries task: {}", self.config.server_id, e);
                 }
             }
         }
