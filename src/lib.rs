@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 // This line makes our custom lsb.rs file available as a module.
 pub mod lsb;
@@ -55,4 +56,61 @@ pub enum ServerRole {
     Follower,
     Candidate,
     Leader,
+}
+
+// --- LOAD BALANCING TYPES ---
+
+/// Server metrics for load balancing decisions
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServerMetrics {
+    pub server_id: String,
+    pub cpu_load: f32,              // 0.0 - 100.0 (estimated from connections)
+    pub active_connections: u32,    // Current number of active clients
+    pub avg_response_time_ms: u64,  // Historical average response time
+    pub total_requests: u64,        // Total requests processed
+    pub timestamp: SystemTime,      // When metrics were collected
+}
+
+impl ServerMetrics {
+    /// Calculate load score for this server (lower is better)
+    /// This score is used to determine which server should handle incoming work
+    pub fn calculate_load_score(&self) -> f32 {
+        // Weighted scoring formula - adjust these weights based on your priorities
+        let cpu_weight = 0.4;
+        let connection_weight = 0.4;
+        let response_weight = 0.2;
+        
+        // Normalize values to 0.0-1.0 range
+        let normalized_cpu = self.cpu_load / 100.0;
+        let normalized_connections = (self.active_connections as f32) / 50.0; // assume max 50 connections
+        let normalized_response = (self.avg_response_time_ms as f32) / 10000.0; // normalize to 10 seconds
+        
+        // Calculate weighted sum
+        cpu_weight * normalized_cpu +
+        connection_weight * normalized_connections +
+        response_weight * normalized_response
+    }
+}
+
+/// Messages exchanged between servers for load balancing
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum LoadBalancingMessage {
+    /// Leader requests current metrics from a server
+    MetricsRequest,
+    
+    /// Server responds with its current metrics
+    MetricsResponse {
+        metrics: ServerMetrics,
+    },
+    
+    /// Leader forwards work to a chosen server
+    ForwardWork {
+        metadata: Vec<u8>,
+        image_data: Vec<u8>,
+    },
+    
+    /// Worker server sends encrypted result back to leader
+    WorkResult {
+        encrypted_image: Vec<u8>,
+    },
 }
