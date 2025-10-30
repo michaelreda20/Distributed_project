@@ -24,6 +24,23 @@ pub struct CombinedPayload {
     pub unified_image: Vec<u8>, // Raw bytes of the PNG
 }
 
+/// A command to be applied to the state machine (minimal implementation)
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LogEntry {
+    pub term: u64,
+    // In a full implementation, this would contain a command (e.g., "SetLeaderID"),
+    // but for this phase, we'll keep it simple for heartbeat/indexing purposes.
+    pub command: String, 
+}
+
+// Persistent state that must be saved to disk
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RaftPersistentState {
+    pub current_term: u64,
+    pub voted_for: Option<String>,
+    pub log: Vec<LogEntry>,
+}
+
 // --- RAFT MESSAGE TYPES ---
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -31,22 +48,29 @@ pub enum RaftMessage {
     RequestVote {
         term: u64,
         candidate_id: String,
-        last_log_index: u64,
-        last_log_term: u64,
+        last_log_index: u64, // Used for safety check
+        last_log_term: u64,  // Used for safety check
     },
     RequestVoteResponse {
         term: u64,
         vote_granted: bool,
         voter_id: String,
     },
-    Heartbeat {
+    // Heartbeat is now replaced by AppendEntries (RPC used for both log replication and heartbeats)
+    AppendEntries {
         term: u64,
         leader_id: String,
+        prev_log_index: u64, // Index of log entry immediately preceding new ones
+        prev_log_term: u64,  // Term of prev_log_index entry
+        entries: Vec<LogEntry>, // Log entries to store (empty for heartbeats)
+        leader_commit: u64,      // Leader's commit index
     },
-    HeartbeatResponse {
+    AppendEntriesResponse {
         term: u64,
         follower_id: String,
         success: bool,
+        // The follower's last log index (used as a conflict hint)
+        last_log_index: u64,
     },
 }
 

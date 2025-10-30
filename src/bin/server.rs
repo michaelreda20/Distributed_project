@@ -10,7 +10,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-
+use log::debug;
 const RAFT_PORT_OFFSET: u16 = 1000; // Raft runs on port + 1000
 
 #[tokio::main]
@@ -45,8 +45,8 @@ async fn main() -> Result<()> {
     let raft_config = RaftConfig {
         server_id: server_id.clone(),
         peers: raft_peers,
-        election_timeout_min: 3000,
-        election_timeout_max: 6000,
+        election_timeout_min: 5000,
+        election_timeout_max: 8000,
         heartbeat_interval: 1000,
     };
 
@@ -168,6 +168,7 @@ async fn handle_client(mut stream: TcpStream, raft_node: Arc<RaftNode>) -> Resul
     let unified_image_bytes = match fs::read("unified_image.png") {
         Ok(bytes) => {
             info!("Loaded unified image ({} bytes)", bytes.len());
+            debug!("Successfully loaded unified_image.png");
             bytes
         }
         Err(e) => {
