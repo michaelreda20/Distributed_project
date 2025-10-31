@@ -571,33 +571,34 @@ async fn forward_work_to_address(
     }
 }
 
-/// Process encryption work (either locally or as forwarded work)
+// server.rs - Make process_encryption_work truly non-blocking
 async fn process_encryption_work(meta_buf: &[u8], img_buf: &[u8]) -> Result<Vec<u8>> {
-    let permissions: ImagePermissions = bincode::deserialize(meta_buf)?;
-    let img = image::load_from_memory(img_buf)?;
+    let meta_buf = meta_buf.to_vec();
+    let img_buf = img_buf.to_vec();
+    
+    // Run CPU/IO intensive work on blocking thread pool
+    tokio::task::spawn_blocking(move || {
+        let permissions: ImagePermissions = bincode::deserialize(&meta_buf)?;
+        let img = image::load_from_memory(&img_buf)?;
 
-    let unified_image_bytes = match fs::read("unified_image.png") {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            error!("FATAL: Could not load 'unified_image.png': {}", e);
-            bail!("Could not load unified_image.png");
-        }
-    };
+        // This blocking I/O won't block heartbeats anymore
+        let unified_image_bytes = fs::read("unified_image.png")?;
 
-    let combined_payload = CombinedPayload {
-        permissions,
-        unified_image: unified_image_bytes,
-    };
-    
-    let final_payload = bincode::serialize(&combined_payload)?;
-    let encoded_img = lsb::encode(&img, &final_payload)?;
-    
-    // Simulate processing time
-    info!("Simulating 5 seconds of encryption work...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    
-    let mut out_buf = Vec::new();
-    encoded_img.write_to(&mut Cursor::new(&mut out_buf), ImageOutputFormat::Png)?;
-    
-    Ok(out_buf)
+        let combined_payload = CombinedPayload {
+            permissions,
+            unified_image: unified_image_bytes,
+        };
+        
+        let final_payload = bincode::serialize(&combined_payload)?;
+        let encoded_img = lsb::encode(&img, &final_payload)?;
+        
+        // Simulate work
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        
+        let mut out_buf = Vec::new();
+        encoded_img.write_to(&mut Cursor::new(&mut out_buf), ImageOutputFormat::Png)?;
+        
+        Ok::<Vec<u8>, anyhow::Error>(out_buf)
+    })
+    .await?
 }

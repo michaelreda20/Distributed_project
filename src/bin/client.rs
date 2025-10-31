@@ -279,8 +279,8 @@ fn send_multicast_request(addr: &str, meta_bytes: &[u8], img_buf: &[u8]) -> Resu
     
     // Read timeout: 20 seconds (to account for 5 second processing + network delay)
     // If leader fails during processing, we'll timeout and detect it
-    stream.set_read_timeout(Some(Duration::from_secs(20)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(120)))?;
 
     // Send metadata size and data
     let meta_size = meta_bytes.len() as u64;
