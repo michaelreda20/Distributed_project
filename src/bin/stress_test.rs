@@ -1,28 +1,19 @@
-//run outside src
-// # Run 1000 requests with 10 threads
-// cargo run --bin stress_test -- -n 1000 -t 10 -i my_image.png
-
-// # Run 5000 requests with 20 threads, verbose output
-// cargo run --bin stress_test -- -n 5000 -t 20 -i test_image.png -v
-
-// # With custom timeouts and delay
-// cargo run --bin stress_test -- -n 2000 -t 15 --connect-timeout 10 --rw-timeout 60 -d 100
-// ```
-
-// **Available options:**
-// - `-n, --num-requests`: Number of total requests (default: 1000)
-// - `-t, --num-threads`: Concurrent threads (default: 10)
-// - `-i, --input-image`: Test image file (default: test_image.png)
-// - `-s, --server-config`: Server config file (default: servers.conf)
-// - `-d, --delay-ms`: Delay between requests per thread in ms (default: 0)
-// - `--connect-timeout`: Connection timeout in seconds (default: 5)
-// - `--rw-timeout`: Read/write timeout in seconds (default: 30)
-// - `-v, --verbose`: Enable verbose output
-
+//! Complete Stress Test with Enhanced Image Validation
+//! 
+//! Run examples:
+//! # Run 1000 requests with 10 threads
+//! cargo run --bin stress_test -- -n 1000 -t 10 -i my_image.png
+//!
+//! # Run 5000 requests with 20 threads, verbose output
+//! cargo run --bin stress_test -- -n 5000 -t 20 -i test_image.png -v
+//!
+//! # With custom timeouts and delay
+//! cargo run --bin stress_test -- -n 2000 -t 15 --connect-timeout 10 --rw-timeout 60 -d 100
 
 use anyhow::{bail, Result};
 use bincode;
 use cloud_p2p_project::ImagePermissions;
+use image::{ImageFormat, GenericImageView};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -93,6 +84,13 @@ struct TestStatistics {
     successful_requests: AtomicUsize,
     failed_requests: AtomicUsize,
     
+    // Image validation metrics
+    valid_images: AtomicUsize,           // Images that passed PNG validation
+    invalid_images: AtomicUsize,         // Images that failed PNG validation
+    total_image_bytes: AtomicU64,        // Total bytes of all valid images
+    min_image_size: AtomicU64,           // Smallest valid image
+    max_image_size: AtomicU64,           // Largest valid image
+    
     // Retry statistics
     total_retries: AtomicUsize,
     requests_with_retries: AtomicUsize,
@@ -127,6 +125,11 @@ impl TestStatistics {
             total_requests: AtomicUsize::new(0),
             successful_requests: AtomicUsize::new(0),
             failed_requests: AtomicUsize::new(0),
+            valid_images: AtomicUsize::new(0),
+            invalid_images: AtomicUsize::new(0),
+            total_image_bytes: AtomicU64::new(0),
+            min_image_size: AtomicU64::new(u64::MAX),
+            max_image_size: AtomicU64::new(0),
             total_retries: AtomicUsize::new(0),
             requests_with_retries: AtomicUsize::new(0),
             connection_errors: AtomicUsize::new(0),
@@ -145,10 +148,54 @@ impl TestStatistics {
         }
     }
     
-    fn record_success(&self, response_time_ms: u64, leader_id: Option<String>, retry_count: usize) {
+    fn record_valid_image(&self, image_size: u64) {
+        self.valid_images.fetch_add(1, Ordering::Relaxed);
+        self.total_image_bytes.fetch_add(image_size, Ordering::Relaxed);
+        
+        // Update min size
+        let mut current_min = self.min_image_size.load(Ordering::Relaxed);
+        while image_size < current_min {
+            match self.min_image_size.compare_exchange(
+                current_min,
+                image_size,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(new_min) => current_min = new_min,
+            }
+        }
+        
+        // Update max size
+        let mut current_max = self.max_image_size.load(Ordering::Relaxed);
+        while image_size > current_max {
+            match self.max_image_size.compare_exchange(
+                current_max,
+                image_size,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(new_max) => current_max = new_max,
+            }
+        }
+    }
+    
+    fn record_invalid_image(&self) {
+        self.invalid_images.fetch_add(1, Ordering::Relaxed);
+    }
+    
+    fn record_success(&self, response_time_ms: u64, leader_id: Option<String>, retry_count: usize, image_size: u64, is_valid_image: bool) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         self.successful_requests.fetch_add(1, Ordering::Relaxed);
         self.total_response_time_ms.fetch_add(response_time_ms, Ordering::Relaxed);
+        
+        // Track image validation
+        if is_valid_image {
+            self.record_valid_image(image_size);
+        } else {
+            self.record_invalid_image();
+        }
         
         // Track retries
         if retry_count > 0 {
@@ -225,20 +272,50 @@ impl TestStatistics {
         let total_retries = self.total_retries.load(Ordering::Relaxed);
         let requests_with_retries = self.requests_with_retries.load(Ordering::Relaxed);
         
-        println!("\n╔══════════════════════════════════════════════════════════════╗");
+        // Image validation stats
+        let valid_imgs = self.valid_images.load(Ordering::Relaxed);
+        let invalid_imgs = self.invalid_images.load(Ordering::Relaxed);
+        let total_img_bytes = self.total_image_bytes.load(Ordering::Relaxed);
+        let min_img = self.min_image_size.load(Ordering::Relaxed);
+        let max_img = self.max_image_size.load(Ordering::Relaxed);
+        
+        println!("\n╔═══════════════════════════════════════════════════════════════╗");
         println!("║              STRESS TEST RESULTS                             ║");
-        println!("╚══════════════════════════════════════════════════════════════╝");
+        println!("╚═══════════════════════════════════════════════════════════════╝");
         
         println!("\n📊 OVERALL STATISTICS");
-        println!("─────────────────────────────────────────────────────────────");
+        println!("───────────────────────────────────────────────────────────────");
         println!("  Total Requests:       {}", total);
         println!("  Successful:           {} ({:.2}%)", success, (success as f64 / total as f64) * 100.0);
         println!("  Failed:               {} ({:.2}%)", failed, (failed as f64 / total as f64) * 100.0);
         println!("  Test Duration:        {:.2} seconds", total_time);
         println!("  Throughput:           {:.2} requests/second", total as f64 / total_time);
         
+        println!("\n🖼️  IMAGE VALIDATION");
+        println!("───────────────────────────────────────────────────────────────");
+        if success > 0 {
+            println!("  Valid PNG Images:     {} ({:.2}%)", 
+                     valid_imgs, (valid_imgs as f64 / success as f64) * 100.0);
+            println!("  Invalid Images:       {} ({:.2}%)", 
+                     invalid_imgs, (invalid_imgs as f64 / success as f64) * 100.0);
+            
+            if valid_imgs > 0 {
+                let avg_size = total_img_bytes / valid_imgs as u64;
+                println!("  Avg Image Size:       {:.2} KB", avg_size as f64 / 1024.0);
+                if min_img != u64::MAX {
+                    println!("  Min Image Size:       {:.2} KB", min_img as f64 / 1024.0);
+                }
+                if max_img > 0 {
+                    println!("  Max Image Size:       {:.2} KB", max_img as f64 / 1024.0);
+                }
+                println!("  Total Data Transfer:  {:.2} MB", total_img_bytes as f64 / 1_048_576.0);
+            }
+        } else {
+            println!("  No successful responses to validate");
+        }
+        
         println!("\n🔄 RETRY STATISTICS");
-        println!("─────────────────────────────────────────────────────────────");
+        println!("───────────────────────────────────────────────────────────────");
         println!("  Total Retries:        {}", total_retries);
         println!("  Requests with Retries: {} ({:.2}%)", 
                  requests_with_retries, 
@@ -249,7 +326,7 @@ impl TestStatistics {
         }
         
         println!("\n❌ ERROR BREAKDOWN");
-        println!("─────────────────────────────────────────────────────────────");
+        println!("───────────────────────────────────────────────────────────────");
         println!("  Connection Errors:    {}", self.connection_errors.load(Ordering::Relaxed));
         println!("  Timeout Errors:       {}", self.timeout_errors.load(Ordering::Relaxed));
         println!("  NOT_LEADER Errors:    {}", self.not_leader_errors.load(Ordering::Relaxed));
@@ -264,10 +341,14 @@ impl TestStatistics {
             let max_response = self.max_response_time_ms.load(Ordering::Relaxed);
             
             println!("\n⏱️  RESPONSE TIME STATISTICS");
-            println!("─────────────────────────────────────────────────────────────");
+            println!("───────────────────────────────────────────────────────────────");
             println!("  Average:              {} ms", avg_response);
-            println!("  Minimum:              {} ms", min_response);
-            println!("  Maximum:              {} ms", max_response);
+            if min_response != u64::MAX {
+                println!("  Minimum:              {} ms", min_response);
+            }
+            if max_response > 0 {
+                println!("  Maximum:              {} ms", max_response);
+            }
             
             // Calculate percentiles
             let mut times = self.response_times.lock().unwrap();
@@ -286,7 +367,7 @@ impl TestStatistics {
         }
         
         println!("\n🔄 LEADER ELECTION STATISTICS");
-        println!("─────────────────────────────────────────────────────────────");
+        println!("───────────────────────────────────────────────────────────────");
         println!("  Leader Changes:       {}", self.leader_changes.load(Ordering::Relaxed));
         if let Some(ref leader) = *self.last_known_leader.lock().unwrap() {
             println!("  Final Leader:         {}", leader);
@@ -295,7 +376,7 @@ impl TestStatistics {
         // Success rate assessment
         let success_rate = (success as f64 / total as f64) * 100.0;
         println!("\n📈 ASSESSMENT");
-        println!("─────────────────────────────────────────────────────────────");
+        println!("───────────────────────────────────────────────────────────────");
         if success_rate >= 99.0 {
             println!("  ✅ EXCELLENT: Success rate >= 99%");
         } else if success_rate >= 95.0 {
@@ -304,6 +385,18 @@ impl TestStatistics {
             println!("  ⚠️  FAIR: Success rate >= 90%");
         } else {
             println!("  ❌ POOR: Success rate < 90%");
+        }
+        
+        // Image validation assessment
+        if success > 0 {
+            let valid_rate = (valid_imgs as f64 / success as f64) * 100.0;
+            if valid_rate >= 99.0 {
+                println!("  ✅ EXCELLENT: Image validation rate >= 99%");
+            } else if valid_rate >= 95.0 {
+                println!("  ✓ GOOD: Image validation rate >= 95%");
+            } else {
+                println!("  ⚠️  WARNING: Image validation rate < 95%");
+            }
         }
         
         println!("\n");
@@ -315,6 +408,9 @@ impl TestStatistics {
         let failed = self.failed_requests.load(Ordering::Relaxed);
         let total_time = self.start_time.elapsed().as_secs_f64();
         let total_retries = self.total_retries.load(Ordering::Relaxed);
+        let valid_imgs = self.valid_images.load(Ordering::Relaxed);
+        let invalid_imgs = self.invalid_images.load(Ordering::Relaxed);
+        let total_img_bytes = self.total_image_bytes.load(Ordering::Relaxed);
         
         let report = format!(
             "Stress Test Report - {}\n\
@@ -326,6 +422,11 @@ impl TestStatistics {
              - Failed: {} ({:.2}%)\n\
              - Test Duration: {:.2}s\n\
              - Throughput: {:.2} req/s\n\
+             \n\
+             Image Validation:\n\
+             - Valid PNG Images: {} ({:.2}%)\n\
+             - Invalid Images: {} ({:.2}%)\n\
+             - Total Data Transfer: {:.2} MB\n\
              \n\
              Retry Statistics:\n\
              - Total Retries: {}\n\
@@ -347,12 +448,15 @@ impl TestStatistics {
              Leader Election:\n\
              - Leader Changes: {}\n\
              ",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            format_timestamp(),
             total,
             success, (success as f64 / total as f64) * 100.0,
             failed, (failed as f64 / total as f64) * 100.0,
             total_time,
             total as f64 / total_time,
+            valid_imgs, if success > 0 { (valid_imgs as f64 / success as f64) * 100.0 } else { 0.0 },
+            invalid_imgs, if success > 0 { (invalid_imgs as f64 / success as f64) * 100.0 } else { 0.0 },
+            total_img_bytes as f64 / 1_048_576.0,
             total_retries,
             self.requests_with_retries.load(Ordering::Relaxed),
             self.connection_errors.load(Ordering::Relaxed),
@@ -384,15 +488,55 @@ enum ErrorType {
 }
 
 // ============================================================================
+// IMAGE VALIDATION
+// ============================================================================
+
+/// Validate that the encrypted data is a proper PNG image
+fn validate_encrypted_image(data: &[u8]) -> Result<bool> {
+    // Check minimum size
+    if data.len() < 8 {
+        return Ok(false);
+    }
+    
+    // Check PNG signature (first 8 bytes)
+    let png_signature: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if &data[0..8] != &png_signature {
+        return Ok(false);
+    }
+    
+    // Try to load the image to ensure it's valid
+    match image::load_from_memory_with_format(data, ImageFormat::Png) {
+        Ok(img) => {
+            let (width, height) = img.dimensions();
+            // Ensure image has reasonable dimensions
+            Ok(width > 0 && height > 0 && data.len() > 1000)
+        }
+        Err(_) => Ok(false)
+    }
+}
+
+/// Save sample encrypted images for manual inspection
+fn save_sample_image(data: &[u8], sample_id: usize, thread_id: usize) -> Result<()> {
+    // Create samples directory if it doesn't exist
+    let samples_dir = "stress_test_samples";
+    fs::create_dir_all(samples_dir)?;
+    
+    let filename = format!("{}/encrypted_sample_t{}_r{}.png", samples_dir, thread_id, sample_id);
+    fs::write(&filename, data)?;
+    
+    Ok(())
+}
+
+// ============================================================================
 // MAIN TEST LOGIC
 // ============================================================================
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     
-    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("╔═══════════════════════════════════════════════════════════════╗");
     println!("║        DISTRIBUTED IMAGE ENCRYPTION STRESS TEST              ║");
-    println!("╚══════════════════════════════════════════════════════════════╝\n");
+    println!("╚═══════════════════════════════════════════════════════════════╝\n");
     
     // Load servers
     let servers = load_servers(&cli.server_config)?;
@@ -400,7 +544,9 @@ fn main() -> Result<()> {
     
     // Load test image
     let img_data = fs::read(&cli.input_image)?;
-    println!("🖼️  Loaded test image: {} ({} bytes)", cli.input_image.display(), img_data.len());
+    println!("🖼️  Loaded test image: {} ({:.2} KB)", 
+             cli.input_image.display(), 
+             img_data.len() as f64 / 1024.0);
     
     // Prepare metadata
     let mut quotas = HashMap::new();
@@ -412,7 +558,7 @@ fn main() -> Result<()> {
     let meta_bytes = bincode::serialize(&permissions)?;
     
     println!("\n📋 TEST CONFIGURATION");
-    println!("─────────────────────────────────────────────────────────────");
+    println!("───────────────────────────────────────────────────────────────");
     println!("  Total Requests:       {}", cli.num_requests);
     println!("  Concurrent Threads:   {}", cli.num_threads);
     println!("  Delay per request:    {} ms", cli.delay_ms);
@@ -470,12 +616,13 @@ fn main() -> Result<()> {
             let completed = stats_monitor.total_requests.load(Ordering::Relaxed);
             let success = stats_monitor.successful_requests.load(Ordering::Relaxed);
             let retries = stats_monitor.total_retries.load(Ordering::Relaxed);
+            let valid = stats_monitor.valid_images.load(Ordering::Relaxed);
             let progress = (completed as f64 / total_requests as f64) * 100.0;
             
-            print!("\r⏳ Progress: {}/{} ({:.1}%) | ✓ Success: {} | ✗ Failed: {} | 🔄 Retries: {}    ",
+            print!("\r⏳ Progress: {}/{} ({:.1}%) | ✓ Success: {} | ✗ Failed: {} | 🔄 Retries: {} | ✅ Valid: {}    ",
                    completed, total_requests, progress, success,
                    stats_monitor.failed_requests.load(Ordering::Relaxed),
-                   retries);
+                   retries, valid);
             std::io::stdout().flush().ok();
             
             if completed >= total_requests {
@@ -496,9 +643,12 @@ fn main() -> Result<()> {
     // Print and save results
     stats.print_report();
     
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let timestamp = format_timestamp();
     let report_filename = format!("stress_test_report_{}.txt", timestamp);
     stats.save_to_file(&report_filename)?;
+    
+    // Compare image sizes
+    compare_image_sizes(&cli.input_image)?;
     
     Ok(())
 }
@@ -516,6 +666,9 @@ fn run_worker(
     stats: Arc<TestStatistics>,
     config: Cli,
 ) {
+    let mut samples_saved = 0;
+    let max_samples_per_thread = 3; // Save first 3 successful images per thread
+    
     for request_id in 0..num_requests {
         let start_time = Instant::now();
         
@@ -542,23 +695,46 @@ fn run_worker(
                     config.rw_timeout,
                 ) {
                     Ok((encrypted_data, leader_id)) => {
-                        // Verify response is valid (not suspiciously small)
-                        if encrypted_data.len() > 1000 {
-                            let response_time = start_time.elapsed().as_millis() as u64;
-                            stats.record_success(response_time, leader_id.clone(), attempt);
-                            response_leader = leader_id;
-                            success = true;
-                            
-                            if config.verbose {
-                                println!("[Thread-{}] Request #{}: SUCCESS in {}ms after {} attempts (leader: {:?})",
-                                         thread_id, request_id, response_time, attempt + 1, response_leader);
+                        // ENHANCED VALIDATION: Check if it's a valid PNG image
+                        match validate_encrypted_image(&encrypted_data) {
+                            Ok(true) => {
+                                let response_time = start_time.elapsed().as_millis() as u64;
+                                let image_size = encrypted_data.len() as u64;
+                                stats.record_success(response_time, leader_id.clone(), attempt, image_size, true);
+                                response_leader = leader_id;
+                                success = true;
+                                
+                                // Save sample images for manual verification
+                                if samples_saved < max_samples_per_thread {
+                                    if let Ok(_) = save_sample_image(&encrypted_data, request_id, thread_id) {
+                                        samples_saved += 1;
+                                        if config.verbose {
+                                            println!("[Thread-{}] Saved sample image #{}", thread_id, samples_saved);
+                                        }
+                                    }
+                                }
+                                
+                                if config.verbose {
+                                    println!("[Thread-{}] Request #{}: SUCCESS - Valid PNG ({:.2}KB) in {}ms after {} attempts (leader: {:?})",
+                                             thread_id, request_id,
+                                             encrypted_data.len() as f64 / 1024.0,
+                                             response_time, attempt + 1, response_leader);
+                                }
+                                break; // Exit server loop on success
                             }
-                            break; // Exit server loop on success
-                        } else {
-                            last_error = ErrorType::InvalidResponse;
-                            if config.verbose {
-                                println!("[Thread-{}] Request #{}: Invalid response size from {} ({}B)",
-                                         thread_id, request_id, server_addr, encrypted_data.len());
+                            Ok(false) => {
+                                last_error = ErrorType::InvalidResponse;
+                                if config.verbose {
+                                    println!("[Thread-{}] Request #{}: Invalid PNG from {} ({}B, signature check failed)",
+                                             thread_id, request_id, server_addr, encrypted_data.len());
+                                }
+                            }
+                            Err(e) => {
+                                last_error = ErrorType::InvalidResponse;
+                                if config.verbose {
+                                    println!("[Thread-{}] Request #{}: Image validation error: {}", 
+                                             thread_id, request_id, e);
+                                }
                             }
                         }
                     }
@@ -603,8 +779,8 @@ fn run_worker(
         if !success {
             stats.record_failure(last_error, attempt - 1);
             if config.verbose {
-                println!("[Thread-{}] Request #{}: PERMANENTLY FAILED after {} attempts",
-                         thread_id, request_id, attempt);
+                println!("[Thread-{}] Request #{}: PERMANENTLY FAILED after {} attempts - {:?}",
+                         thread_id, request_id, attempt, last_error);
             }
         }
         
@@ -612,6 +788,11 @@ fn run_worker(
         if config.delay_ms > 0 {
             thread::sleep(Duration::from_millis(config.delay_ms));
         }
+    }
+    
+    if config.verbose || samples_saved > 0 {
+        println!("[Thread-{}] Completed. Saved {} sample images to stress_test_samples/", 
+                 thread_id, samples_saved);
     }
 }
 
@@ -659,6 +840,7 @@ fn send_encryption_request(
     let img_size = img_buf.len() as u64;
     stream.write_all(&img_size.to_be_bytes())?;
     stream.write_all(img_buf)?;
+    stream.flush()?;
     
     // Receive response size
     let mut size_bytes = [0u8; 8];
@@ -680,31 +862,81 @@ fn send_encryption_request(
         }
     }
     
-    // Extract leader ID if possible
-    let leader_id = None; // TODO: Server could include leader ID in response
+    // Extract leader ID if possible (for future enhancement)
+    let leader_id = None;
     
     Ok((response_buf, leader_id))
 }
 
-// Timestamp formatting module
-mod chrono {
-    use std::time::SystemTime;
+fn compare_image_sizes(original_path: &PathBuf) -> Result<()> {
+    let original_size = fs::metadata(original_path)?.len();
     
-    pub struct Local;
+    println!("\n🔍 IMAGE SIZE COMPARISON");
+    println!("───────────────────────────────────────────────────────────────");
+    println!("  Original image size:  {:.2} KB", original_size as f64 / 1024.0);
     
-    impl Local {
-        pub fn now() -> DateTime {
-            DateTime { time: SystemTime::now() }
+    // Check sample encrypted images
+    let samples_dir = "stress_test_samples";
+    if let Ok(entries) = fs::read_dir(samples_dir) {
+        let mut total_encrypted = 0u64;
+        let mut count = 0;
+        let mut sizes = Vec::new();
+        
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                let size = metadata.len();
+                total_encrypted += size;
+                sizes.push(size);
+                count += 1;
+            }
         }
-    }
-    
-    pub struct DateTime {
-        time: SystemTime,
-    }
-    
-    impl DateTime {
-        pub fn format(&self, _: &str) -> String {
-            format!("{:?}", self.time)
+        
+        if count > 0 {
+            let avg_encrypted = total_encrypted / count;
+            sizes.sort_unstable();
+            
+            println!("  Encrypted samples:    {} files", count);
+            println!("  Avg encrypted size:   {:.2} KB", avg_encrypted as f64 / 1024.0);
+            println!("  Min encrypted size:   {:.2} KB", sizes[0] as f64 / 1024.0);
+            println!("  Max encrypted size:   {:.2} KB", sizes[sizes.len() - 1] as f64 / 1024.0);
+            println!("  Size increase:        {:.1}%", 
+                     ((avg_encrypted as f64 - original_size as f64) / original_size as f64) * 100.0);
+            println!("\n  📁 Sample images saved in: {}/", samples_dir);
+        } else {
+            println!("  No sample images found");
         }
+    } else {
+        println!("  Sample directory not found (no successful requests)");
     }
+    
+    Ok(())
+}
+
+fn format_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap();
+    let secs = duration.as_secs();
+    
+    // Simple timestamp: YYYYMMDD_HHMMSS
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    
+    // Approximate date calculation (simplified, starts from epoch)
+    let years = days / 365;
+    let remaining_days = days % 365;
+    let months = remaining_days / 30;
+    let day_of_month = remaining_days % 30;
+    
+    format!("{:04}{:02}{:02}_{:02}{:02}{:02}",
+            1970 + years,
+            1 + months,
+            1 + day_of_month,
+            hours,
+            minutes,
+            seconds)
 }
