@@ -12,6 +12,39 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use std::os::unix::io::AsRawFd;
+
+/// Configure TCP socket for large file transfers
+fn configure_large_transfer_socket(stream: &TcpStream) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::mem;
+        
+        unsafe {
+            let fd = stream.as_raw_fd();
+            let size: libc::c_int = 8 * 1024 * 1024; // 8MB buffer
+            
+            // Set send buffer
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &size as *const _ as *const libc::c_void,
+                mem::size_of_val(&size) as libc::socklen_t,
+            );
+            
+            // Set receive buffer
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &size as *const _ as *const libc::c_void,
+                mem::size_of_val(&size) as libc::socklen_t,
+            );
+        }
+    }
+    Ok(())
+}
 
 const RAFT_PORT_OFFSET: u16 = 1000;    // Raft runs on port + 1000
 const METRICS_PORT_OFFSET: u16 = 2000; // Metrics server on port + 2000
@@ -382,6 +415,9 @@ async fn handle_client_with_load_balancing(
 ) -> Result<()> {
     let start_time = Instant::now();
 
+    // Configure TCP buffers for large transfers
+    configure_large_transfer_socket(&stream)?;
+
     // Check if this server is the leader
     if !raft_node.is_leader().await {
         // Not the leader, inform client
@@ -593,7 +629,7 @@ async fn process_encryption_work(meta_buf: &[u8], img_buf: &[u8]) -> Result<Vec<
         let encoded_img = lsb::encode(&img, &final_payload)?;
         
         // Simulate work
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        // std::thread::sleep(std::time::Duration::from_secs(5));
         
         let mut out_buf = Vec::new();
         encoded_img.write_to(&mut Cursor::new(&mut out_buf), ImageOutputFormat::Png)?;

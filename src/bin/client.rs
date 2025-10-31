@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::thread;
@@ -86,6 +87,39 @@ enum ServerResponse {
     ConnectionFailed(String),   // Network error or timeout
 }
 
+/// Configure TCP socket for large file transfers
+fn configure_tcp_socket(stream: &TcpStream) -> Result<()> {
+    let raw_fd = stream.as_raw_fd();
+    
+    unsafe {
+        use std::mem;
+        let size: libc::c_int = 8 * 1024 * 1024; // 8MB buffer
+        
+        // Set send buffer size
+        libc::setsockopt(
+            raw_fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &size as *const _ as *const libc::c_void,
+            mem::size_of_val(&size) as libc::socklen_t,
+        );
+        
+        // Set receive buffer size
+        libc::setsockopt(
+            raw_fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &size as *const _ as *const libc::c_void,
+            mem::size_of_val(&size) as libc::socklen_t,
+        );
+    }
+    
+    // Disable Nagle's algorithm for better latency
+    stream.set_nodelay(true)?;
+    
+    Ok(())
+}
+
 fn handle_encrypt(input_path: &PathBuf, owner: &String) -> Result<()> {
     println!("=== Encryptor Mode (Multicast with Fault Tolerance) ===");
 
@@ -95,7 +129,10 @@ fn handle_encrypt(input_path: &PathBuf, owner: &String) -> Result<()> {
 
     // 2. Prepare metadata and image
     let img_buf = fs::read(input_path)?;
-    println!("Read '{}' ({} bytes)", input_path.display(), img_buf.len());
+    println!("Read '{}' ({} bytes = {:.2} MB)", 
+             input_path.display(), 
+             img_buf.len(),
+             img_buf.len() as f64 / 1_048_576.0);
 
     let mut quotas = HashMap::new();
     quotas.insert(owner.clone(), 3);
@@ -160,7 +197,9 @@ fn handle_encrypt(input_path: &PathBuf, owner: &String) -> Result<()> {
         // Check if we got success
         if let Some(encrypted_image) = success_response {
             println!("\n=== ✓ ENCRYPTION SUCCESSFUL ===");
-            println!("Received encrypted image ({} bytes)", encrypted_image.len());
+            println!("Received encrypted image ({} bytes = {:.2} MB)", 
+                     encrypted_image.len(),
+                     encrypted_image.len() as f64 / 1_048_576.0);
             
             fs::write(ENCRYPTED_OUTPUT_IMAGE, &encrypted_image)?;
             println!("Saved encrypted image to '{}'", ENCRYPTED_OUTPUT_IMAGE);
@@ -271,14 +310,16 @@ fn multicast_to_servers(
 
 /// Send multicast request to a single server
 fn send_multicast_request(addr: &str, meta_bytes: &[u8], img_buf: &[u8]) -> Result<Vec<u8>> {
-    // Connection timeout: 3 seconds
+    // Connection timeout: 10 seconds (increased for large images)
     let mut stream = TcpStream::connect_timeout(
         &addr.parse()?, 
-        Duration::from_secs(3)
+        Duration::from_secs(10)
     )?;
     
-    // Read timeout: 20 seconds (to account for 5 second processing + network delay)
-    // If leader fails during processing, we'll timeout and detect it
+    // Configure TCP socket for large transfers
+    configure_tcp_socket(&stream)?;
+    
+    // Read/Write timeout: 120 seconds (to account for large image processing)
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(120)))?;
 
@@ -291,6 +332,8 @@ fn send_multicast_request(addr: &str, meta_bytes: &[u8], img_buf: &[u8]) -> Resu
     let img_size = img_buf.len() as u64;
     stream.write_all(&img_size.to_be_bytes())?;
     stream.write_all(img_buf)?;
+    
+    stream.flush()?; // Ensure all data is sent
 
     // Receive response size
     let mut size_bytes = [0u8; 8];
@@ -342,16 +385,16 @@ fn handle_view(input_path: &PathBuf, current_user: &String) -> Result<()> {
     // Check if current user is authorized
     let has_access = match permissions.quotas.get_mut(current_user) {
         Some(views_left) if *views_left > 0 => {
-            println!(" Access granted. You have {} views left.", *views_left);
+            println!("Access granted. You have {} views left.", *views_left);
             *views_left -= 1;
             true
         }
         Some(_) => {
-            println!(" Access denied. No remaining views!");
+            println!("Access denied. No remaining views!");
             false
         }
         None => {
-            println!(" Access denied. You are not authorized to view this image!");
+            println!("Access denied. You are not authorized to view this image!");
             false
         }
     };
