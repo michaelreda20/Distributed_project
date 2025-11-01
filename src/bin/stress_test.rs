@@ -2,13 +2,23 @@
 //! 
 //! Run examples:
 //! # Run 1000 requests with 10 threads
-//! cargo run --bin stress_test -- -n 1000 -t 10 -i my_image.png
+//! cargo run --bin stress_test -- -n 1000 -t 10 -i my_image.jpg
 //!
 //! # Run 5000 requests with 20 threads, verbose output
-//! cargo run --bin stress_test -- -n 5000 -t 20 -i test_image.png -v
+//! cargo run --bin stress_test -- -n 5000 -t 20 -i my_image.jpg -v
 //!
 //! # With custom timeouts and delay
 //! cargo run --bin stress_test -- -n 2000 -t 15 --connect-timeout 10 --rw-timeout 60 -d 100
+
+// // # Build in release mode for better performance
+// cargo build --release --bin stress_test
+
+// cargo run --release --bin stress_test -- \
+//   -n 1000 \
+//   -t 10 \
+//   -i my_image.jpg \
+//   -s servers.conf
+
 
 use anyhow::{bail, Result};
 use bincode;
