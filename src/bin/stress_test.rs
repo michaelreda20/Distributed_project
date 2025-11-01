@@ -654,7 +654,7 @@ fn main() -> Result<()> {
 }
 
 // ============================================================================
-// WORKER LOGIC WITH RETRY MECHANISM
+// WORKER LOGIC WITH RETRY MECHANISM (MODIFIED FOR TRUE MULTICAST)
 // ============================================================================
 
 fn run_worker(
@@ -674,19 +674,23 @@ fn run_worker(
         
         // Retry loop: try up to max_retries times
         let mut attempt = 0;
-        let mut success = false;
+        let mut success_reported = false; // <-- NEW FLAG: Tracks if a success has been recorded for this REQUEST
         let mut last_error = ErrorType::Other;
-        let mut response_leader: Option<String> = None;
         
-        // Keep retrying until success or max retries reached
-        while attempt <= config.max_retries && !success {
+        // Keep retrying until a request succeeds or max retries reached
+        while attempt <= config.max_retries && !success_reported {
             if config.verbose && attempt > 0 {
                 println!("[Thread-{}] Request #{}: Retry attempt {} of {}",
                          thread_id, request_id, attempt, config.max_retries);
             }
             
-            // Try each server until one succeeds
+            // *******************************************************************
+            // MODIFIED LOGIC: TRUE MULTICAST - Send to all servers and only
+            // record the FIRST success received for this request attempt.
+            // *******************************************************************
             for server_addr in &servers {
+                let mut current_server_success = false;
+
                 match send_encryption_request(
                     server_addr,
                     &meta_bytes,
@@ -695,54 +699,58 @@ fn run_worker(
                     config.rw_timeout,
                 ) {
                     Ok((encrypted_data, leader_id)) => {
-                        // ENHANCED VALIDATION: Check if it's a valid PNG image
-                        match validate_encrypted_image(&encrypted_data) {
-                            Ok(true) => {
-                                let response_time = start_time.elapsed().as_millis() as u64;
-                                let image_size = encrypted_data.len() as u64;
-                                stats.record_success(response_time, leader_id.clone(), attempt, image_size, true);
-                                response_leader = leader_id;
-                                success = true;
-                                
-                                // Save sample images for manual verification
-                                if samples_saved < max_samples_per_thread {
-                                    if let Ok(_) = save_sample_image(&encrypted_data, request_id, thread_id) {
-                                        samples_saved += 1;
-                                        if config.verbose {
-                                            println!("[Thread-{}] Saved sample image #{}", thread_id, samples_saved);
+                        current_server_success = true; // This server responded successfully
+                        
+                        // ONLY record success metrics/samples if we haven't already recorded one
+                        if !success_reported { 
+                            match validate_encrypted_image(&encrypted_data) {
+                                Ok(true) => {
+                                    let response_time = start_time.elapsed().as_millis() as u64;
+                                    let image_size = encrypted_data.len() as u64;
+                                    stats.record_success(response_time, leader_id.clone(), attempt, image_size, true);
+                                    success_reported = true; // Mark as successful response received
+
+                                    // Save sample images for manual verification
+                                    if samples_saved < max_samples_per_thread {
+                                        if let Ok(_) = save_sample_image(&encrypted_data, request_id, thread_id) {
+                                            samples_saved += 1;
                                         }
                                     }
+                                    
+                                    if config.verbose {
+                                        println!("[Thread-{}] Request #{}: SUCCESS from {} - Valid PNG ({:.2}KB) in {}ms (leader: {:?})",
+                                                 thread_id, request_id, server_addr,
+                                                 encrypted_data.len() as f64 / 1024.0,
+                                                 response_time, leader_id);
+                                    }
                                 }
-                                
-                                if config.verbose {
-                                    println!("[Thread-{}] Request #{}: SUCCESS - Valid PNG ({:.2}KB) in {}ms after {} attempts (leader: {:?})",
-                                             thread_id, request_id,
-                                             encrypted_data.len() as f64 / 1024.0,
-                                             response_time, attempt + 1, response_leader);
+                                Ok(false) => {
+                                    if config.verbose {
+                                        println!("[Thread-{}] Request #{}: Invalid PNG from {} ({}B, signature check failed)",
+                                                 thread_id, request_id, server_addr, encrypted_data.len());
+                                    }
+                                    // If validation fails, it's treated as a potential retryable failure (or just ignored for success counting)
+                                    // last_error remains the last encountered *fatal* error type.
                                 }
-                                break; // Exit server loop on success
+                                Err(e) => {
+                                    if config.verbose {
+                                        println!("[Thread-{}] Request #{}: Image validation error from {}: {}", 
+                                                 thread_id, request_id, server_addr, e);
+                                    }
+                                }
                             }
-                            Ok(false) => {
-                                last_error = ErrorType::InvalidResponse;
-                                if config.verbose {
-                                    println!("[Thread-{}] Request #{}: Invalid PNG from {} ({}B, signature check failed)",
-                                             thread_id, request_id, server_addr, encrypted_data.len());
-                                }
-                            }
-                            Err(e) => {
-                                last_error = ErrorType::InvalidResponse;
-                                if config.verbose {
-                                    println!("[Thread-{}] Request #{}: Image validation error: {}", 
-                                             thread_id, request_id, e);
-                                }
-                            }
+                        } else if config.verbose {
+                            // This path means a success was already received from a previous server in this loop
+                            println!("[Thread-{}] Request #{}: IGNORED SUCCESS from {} (already received success from another server)",
+                                     thread_id, request_id, server_addr);
                         }
                     }
                     Err(e) => {
+                        // ... (Error classification remains the same)
                         let err_msg = e.to_string();
                         
                         // Classify the error type
-                        last_error = if err_msg.contains("NOT_LEADER") {
+                        let current_error = if err_msg.contains("NOT_LEADER") {
                             ErrorType::NotLeader
                         } else if err_msg.contains("NO_LEADER") {
                             ErrorType::NoLeader
@@ -753,17 +761,23 @@ fn run_worker(
                         } else {
                             ErrorType::Other
                         };
+
+                        // Only update last_error if we haven't successfully reported for this request yet
+                        if !success_reported {
+                             last_error = current_error;
+                        }
                         
                         if config.verbose {
                             println!("[Thread-{}] Request #{}: Failed on {} - {:?} (attempt {})",
-                                     thread_id, request_id, server_addr, last_error, attempt + 1);
+                                     thread_id, request_id, server_addr, current_error, attempt + 1);
                         }
                     }
                 }
-            }
+            } // END of Multicast Loop (sends to all 3 servers)
+            // *******************************************************************
             
-            // If still not successful, wait before retry (exponential backoff)
-            if !success && attempt < config.max_retries {
+            // If the request was not successful on ANY server in this attempt, wait before retry
+            if !success_reported && attempt < config.max_retries {
                 let backoff_time = config.retry_backoff_ms * 2u64.pow(attempt as u32);
                 if config.verbose {
                     println!("[Thread-{}] Request #{}: Waiting {}ms before retry",
@@ -776,7 +790,7 @@ fn run_worker(
         }
         
         // Record final result
-        if !success {
+        if !success_reported {
             stats.record_failure(last_error, attempt - 1);
             if config.verbose {
                 println!("[Thread-{}] Request #{}: PERMANENTLY FAILED after {} attempts - {:?}",

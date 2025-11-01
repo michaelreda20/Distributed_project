@@ -7,7 +7,7 @@ pub mod lsb;
 pub mod raft;
 
 /// The address the server will listen on.
-pub const ADDR: &str = "127.0.0.1:8080";
+pub const ADDR: &str = "10.40.7.1:8080";
 
 /// The data we will hide inside the image using steganography.
 /// We use a HashMap to map a specific username to their allowed view count.

@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
     });
 
     // Start main application server
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&bind_addr).await?;
     info!("Application server listening on {}", bind_addr);
     info!("Raft consensus running on port {}", raft_port);
@@ -224,7 +224,7 @@ async fn main() -> Result<()> {
 // =============================================================================
 
 async fn start_raft_listener(port: u16, raft_node: Arc<RaftNode>) -> Result<()> {
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&bind_addr).await?;
     info!("Raft listener started on {}", bind_addr);
 
@@ -272,7 +272,7 @@ async fn start_metrics_server(
     lb_state: Arc<LoadBalancingState>,
     server_id: String,
 ) -> Result<()> {
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&bind_addr).await?;
     info!("Metrics server listening on {}", bind_addr);
 
@@ -335,7 +335,7 @@ async fn start_work_receiver(
     port: u16,
     lb_state: Arc<LoadBalancingState>,
 ) -> Result<()> {
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&bind_addr).await?;
     info!("Work receiver listening on {}", bind_addr);
 
