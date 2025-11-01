@@ -150,9 +150,9 @@ async fn main() -> Result<()> {
     let raft_config = RaftConfig {
         server_id: server_id.clone(),
         peers: raft_peers,
-        election_timeout_min: 3000,
-        election_timeout_max: 6000,
-        heartbeat_interval: 1000,
+        election_timeout_min: 4000,
+        election_timeout_max: 10000,
+        heartbeat_interval: 2000,
     };
 
     // Create and start Raft node
