@@ -16,7 +16,7 @@
 // cargo run --release --bin stress_test -- \
 //   -n 1000 \
 //   -t 10 \
-//   -i my_image.jpg \
+//   -i my_image.png \
 //   -s servers.conf
 
 
@@ -526,16 +526,16 @@ fn validate_encrypted_image(data: &[u8]) -> Result<bool> {
 }
 
 /// Save sample encrypted images for manual inspection
-fn save_sample_image(data: &[u8], sample_id: usize, thread_id: usize) -> Result<()> {
-    // Create samples directory if it doesn't exist
-    let samples_dir = "stress_test_samples";
-    fs::create_dir_all(samples_dir)?;
+// fn save_sample_image(data: &[u8], sample_id: usize, thread_id: usize) -> Result<()> {
+//     // Create samples directory if it doesn't exist
+//     let samples_dir = "stress_test_samples";
+//     fs::create_dir_all(samples_dir)?;
     
-    let filename = format!("{}/encrypted_sample_t{}_r{}.png", samples_dir, thread_id, sample_id);
-    fs::write(&filename, data)?;
+//     let filename = format!("{}/encrypted_sample_t{}_r{}.png", samples_dir, thread_id, sample_id);
+//     fs::write(&filename, data)?;
     
-    Ok(())
-}
+//     Ok(())
+// }
 
 // ============================================================================
 // MAIN TEST LOGIC
@@ -658,7 +658,7 @@ fn main() -> Result<()> {
     stats.save_to_file(&report_filename)?;
     
     // Compare image sizes
-    compare_image_sizes(&cli.input_image)?;
+    // compare_image_sizes(&cli.input_image)?;
     
     Ok(())
 }
@@ -676,8 +676,8 @@ fn run_worker(
     stats: Arc<TestStatistics>,
     config: Cli,
 ) {
-    let mut samples_saved = 0;
-    let max_samples_per_thread = 3; // Save first 3 successful images per thread
+    // let mut samples_saved = 0;
+    // let max_samples_per_thread = 3; // Save first 3 successful images per thread
     
     for request_id in 0..num_requests {
         let start_time = Instant::now();
@@ -720,12 +720,12 @@ fn run_worker(
                                     stats.record_success(response_time, leader_id.clone(), attempt, image_size, true);
                                     success_reported = true; // Mark as successful response received
 
-                                    // Save sample images for manual verification
-                                    if samples_saved < max_samples_per_thread {
-                                        if let Ok(_) = save_sample_image(&encrypted_data, request_id, thread_id) {
-                                            samples_saved += 1;
-                                        }
-                                    }
+                                    // // Save sample images for manual verification
+                                    // if samples_saved < max_samples_per_thread {
+                                    //     if let Ok(_) = save_sample_image(&encrypted_data, request_id, thread_id) {
+                                    //         samples_saved += 1;
+                                    //     }
+                                    // }
                                     
                                     if config.verbose {
                                         println!("[Thread-{}] Request #{}: SUCCESS from {} - Valid PNG ({:.2}KB) in {}ms (leader: {:?})",
@@ -814,10 +814,10 @@ fn run_worker(
         }
     }
     
-    if config.verbose || samples_saved > 0 {
-        println!("[Thread-{}] Completed. Saved {} sample images to stress_test_samples/", 
-                 thread_id, samples_saved);
-    }
+    // if config.verbose || samples_saved > 0 {
+    //     println!("[Thread-{}] Completed. Saved {} sample images to stress_test_samples/", 
+    //              thread_id, samples_saved);
+    // }
 }
 
 // ============================================================================
@@ -892,49 +892,49 @@ fn send_encryption_request(
     Ok((response_buf, leader_id))
 }
 
-fn compare_image_sizes(original_path: &PathBuf) -> Result<()> {
-    let original_size = fs::metadata(original_path)?.len();
+// fn compare_image_sizes(original_path: &PathBuf) -> Result<()> {
+//     let original_size = fs::metadata(original_path)?.len();
     
-    println!("\n🔍 IMAGE SIZE COMPARISON");
-    println!("───────────────────────────────────────────────────────────────");
-    println!("  Original image size:  {:.2} KB", original_size as f64 / 1024.0);
+//     println!("\n🔍 IMAGE SIZE COMPARISON");
+//     println!("───────────────────────────────────────────────────────────────");
+//     println!("  Original image size:  {:.2} KB", original_size as f64 / 1024.0);
     
-    // Check sample encrypted images
-    let samples_dir = "stress_test_samples";
-    if let Ok(entries) = fs::read_dir(samples_dir) {
-        let mut total_encrypted = 0u64;
-        let mut count = 0;
-        let mut sizes = Vec::new();
+//     // Check sample encrypted images
+//     let samples_dir = "stress_test_samples";
+//     if let Ok(entries) = fs::read_dir(samples_dir) {
+//         let mut total_encrypted = 0u64;
+//         let mut count = 0;
+//         let mut sizes = Vec::new();
         
-        for entry in entries.flatten() {
-            if let Ok(metadata) = entry.metadata() {
-                let size = metadata.len();
-                total_encrypted += size;
-                sizes.push(size);
-                count += 1;
-            }
-        }
+//         for entry in entries.flatten() {
+//             if let Ok(metadata) = entry.metadata() {
+//                 let size = metadata.len();
+//                 total_encrypted += size;
+//                 sizes.push(size);
+//                 count += 1;
+//             }
+//         }
         
-        if count > 0 {
-            let avg_encrypted = total_encrypted / count;
-            sizes.sort_unstable();
+//         if count > 0 {
+//             let avg_encrypted = total_encrypted / count;
+//             sizes.sort_unstable();
             
-            println!("  Encrypted samples:    {} files", count);
-            println!("  Avg encrypted size:   {:.2} KB", avg_encrypted as f64 / 1024.0);
-            println!("  Min encrypted size:   {:.2} KB", sizes[0] as f64 / 1024.0);
-            println!("  Max encrypted size:   {:.2} KB", sizes[sizes.len() - 1] as f64 / 1024.0);
-            println!("  Size increase:        {:.1}%", 
-                     ((avg_encrypted as f64 - original_size as f64) / original_size as f64) * 100.0);
-            println!("\n  📁 Sample images saved in: {}/", samples_dir);
-        } else {
-            println!("  No sample images found");
-        }
-    } else {
-        println!("  Sample directory not found (no successful requests)");
-    }
+//             println!("  Encrypted samples:    {} files", count);
+//             println!("  Avg encrypted size:   {:.2} KB", avg_encrypted as f64 / 1024.0);
+//             println!("  Min encrypted size:   {:.2} KB", sizes[0] as f64 / 1024.0);
+//             println!("  Max encrypted size:   {:.2} KB", sizes[sizes.len() - 1] as f64 / 1024.0);
+//             println!("  Size increase:        {:.1}%", 
+//                      ((avg_encrypted as f64 - original_size as f64) / original_size as f64) * 100.0);
+//             println!("\n  📁 Sample images saved in: {}/", samples_dir);
+//         } else {
+//             println!("  No sample images found");
+//         }
+//     } else {
+//         println!("  Sample directory not found (no successful requests)");
+//     }
     
-    Ok(())
-}
+//     Ok(())
+// }
 
 fn format_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

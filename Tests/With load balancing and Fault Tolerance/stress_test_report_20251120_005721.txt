@@ -1,0 +1,34 @@
+Stress Test Report - 20251120_005721
+═══════════════════════════════════════
+
+Overall Statistics:
+- Total Requests: 900
+- Successful: 617 (68.56%)
+- Failed: 283 (31.44%)
+- Test Duration: 3688.39s
+- Throughput: 0.24 req/s
+
+Image Validation:
+- Valid PNG Images: 617 (100.00%)
+- Invalid Images: 0 (0.00%)
+- Total Data Transfer: 552.01 MB
+
+Retry Statistics:
+- Total Retries: 2797
+- Requests with Retries: 727
+
+Error Breakdown:
+- Connection Errors: 0
+- Timeout Errors: 11
+- NOT_LEADER Errors: 0
+- NO_LEADER Errors: 0
+- Invalid Response: 0
+- Other Errors: 272
+
+Response Time Statistics (ms):
+- Average: 313688
+- Minimum: 50929
+- Maximum: 830482
+
+Leader Election:
+- Leader Changes: 0

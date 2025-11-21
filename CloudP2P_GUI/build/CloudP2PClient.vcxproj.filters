@@ -1,0 +1,39 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\build\CloudP2PClient_autogen\mocs_compilation_Debug.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\frontend\src\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\frontend\src\mainwindow.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\build\CloudP2PClient_autogen\mocs_compilation_Release.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\build\CloudP2PClient_autogen\mocs_compilation_MinSizeRel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\build\CloudP2PClient_autogen\mocs_compilation_RelWithDebInfo.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\frontend\src\mainwindow.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\AUC\Fall 2025\Distributed Systems\CloudP2P_GUI\frontend\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{D9B1BEF5-C6A8-30A0-A1AF-9AEF1F4FF513}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{18670F6B-CC05-3F3E-9B2A-8E62FE1BAE9B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

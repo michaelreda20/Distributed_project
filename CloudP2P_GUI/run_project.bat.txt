@@ -1,0 +1,194 @@
+@echo off
+title Cloud P2P Image Sharing - Master Control
+color 0A
+
+:menu
+cls
+echo.
+echo  ╔═══════════════════════════════════════════════════════╗
+echo  ║  CLOUD P2P IMAGE SHARING - COMPLETE SYSTEM           ║
+echo  ╚═══════════════════════════════════════════════════════╝
+echo.
+echo  [1] Start Backend Servers (Rust)
+echo  [2] Start Frontend GUI (C++/Qt)
+echo  [3] Start BOTH (Backend + Frontend)
+echo  [4] Stop All Servers
+echo  [5] Build Backend (Rust)
+echo  [6] Build Frontend (C++/Qt)
+echo  [7] Run Stress Test
+echo  [8] Exit
+echo.
+set /p choice="Select option: "
+
+if "%choice%"=="1" goto backend
+if "%choice%"=="2" goto frontend
+if "%choice%"=="3" goto both
+if "%choice%"=="4" goto stop
+if "%choice%"=="5" goto build_backend
+if "%choice%"=="6" goto build_frontend
+if "%choice%"=="7" goto stress_test
+if "%choice%"=="8" exit
+
+:backend
+echo.
+echo ========================================
+echo   Starting Backend Servers...
+echo ========================================
+cd backend
+call start_servers.bat
+cd ..
+pause
+goto menu
+
+:frontend
+echo.
+echo ========================================
+echo   Starting Frontend GUI...
+echo ========================================
+if not exist "frontend\build\Debug\CloudP2PClient.exe" (
+    echo ERROR: Frontend not built!
+    echo Please build frontend first (Option 6)
+    pause
+    goto menu
+)
+cd frontend\build\Debug
+start CloudP2PClient.exe
+cd ..\..\..
+echo Frontend started!
+timeout /t 2
+goto menu
+
+:both
+echo.
+echo ========================================
+echo   Starting Complete System...
+echo ========================================
+echo.
+echo [1/2] Starting Backend Servers...
+start "Backend Servers" cmd /c "cd backend && start_servers.bat"
+echo Waiting 8 seconds for servers to initialize...
+timeout /t 8 /nobreak
+
+echo.
+echo [2/2] Starting Frontend GUI...
+if not exist "frontend\build\Debug\CloudP2PClient.exe" (
+    echo ERROR: Frontend not built!
+    echo Please build frontend first (Option 6)
+    pause
+    goto menu
+)
+cd frontend\build\Debug
+start CloudP2PClient.exe
+cd ..\..\..
+echo.
+echo ========================================
+echo   All Systems Running!
+echo   - Backend: Ports 8001, 8002, 8003
+echo   - Frontend: GUI Window
+echo ========================================
+timeout /t 3
+goto menu
+
+:stop
+echo.
+echo ========================================
+echo   Stopping All Servers...
+echo ========================================
+taskkill /FI "WINDOWTITLE eq Server-*" /F >nul 2>&1
+taskkill /FI "WINDOWTITLE eq Backend*" /F >nul 2>&1
+taskkill /IM server.exe /F >nul 2>&1
+echo All servers stopped.
+timeout /t 2
+goto menu
+
+:build_backend
+echo.
+echo ========================================
+echo   Building Rust Backend...
+echo ========================================
+cd backend
+cargo build --release
+if errorlevel 1 (
+    echo.
+    echo ERROR: Build failed!
+    pause
+    cd ..
+    goto menu
+)
+echo.
+echo Build successful!
+cd ..
+pause
+goto menu
+
+:build_frontend
+echo.
+echo ========================================
+echo   Building C++/Qt Frontend...
+echo ========================================
+cd frontend
+
+if not exist build mkdir build
+cd build
+
+echo Configuring with CMake...
+cmake -DCMAKE_PREFIX_PATH="C:/Qt/6.7.3/msvc2019_64" -G "Visual Studio 17 2022" -A x64 ..
+if errorlevel 1 (
+    echo.
+    echo ERROR: CMake configuration failed!
+    echo Please ensure:
+    echo 1. Qt is installed at C:/Qt/6.7.3/msvc2019_64
+    echo 2. Visual Studio 2022 is installed
+    echo 3. CMake is in PATH
+    pause
+    cd ..\..
+    goto menu
+)
+
+echo Building...
+cmake --build . --config Debug
+if errorlevel 1 (
+    echo.
+    echo ERROR: Build failed!
+    pause
+    cd ..\..
+    goto menu
+)
+
+cd ..\..
+echo.
+echo ========================================
+echo   Build Complete!
+echo   Executable: frontend\build\Debug\CloudP2PClient.exe
+echo ========================================
+pause
+goto menu
+
+:stress_test
+echo.
+echo ========================================
+echo   Running Stress Test...
+echo ========================================
+echo.
+echo Make sure backend servers are running!
+echo Press any key to continue or Ctrl+C to cancel...
+pause >nul
+
+cd backend
+echo.
+echo Running 100 requests with 5 threads (warm-up)...
+cargo run --release --bin stress_test -- -n 100 -t 5 -i my_image.jpg
+
+echo.
+echo Press any key for full stress test (1000 requests)...
+pause >nul
+
+echo.
+echo Running 1000 requests with 10 threads...
+cargo run --release --bin stress_test -- -n 1000 -t 10 -i my_image.jpg
+
+cd ..
+echo.
+echo Stress test complete! Check the report files.
+pause
+goto menu
