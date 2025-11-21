@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use bincode;
 use cloud_p2p_project::raft::{RaftConfig, RaftNode};
 use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions, LoadBalancingMessage, RaftMessage, ServerMetrics};
-use image::ImageOutputFormat;
+use image::{ImageOutputFormat, GenericImageView};
 use log::{error, info};
 use std::env;
 use std::fs;
@@ -607,33 +607,89 @@ async fn forward_work_to_address(
     }
 }
 
-// server.rs - Make process_encryption_work truly non-blocking
+// server.rs - REVERSED STEGANOGRAPHY: Embed client image + metadata inside server's default image
 async fn process_encryption_work(meta_buf: &[u8], img_buf: &[u8]) -> Result<Vec<u8>> {
     let meta_buf = meta_buf.to_vec();
     let img_buf = img_buf.to_vec();
-    
+   
     // Run CPU/IO intensive work on blocking thread pool
     tokio::task::spawn_blocking(move || {
+        // 1. Deserialize the permissions metadata
         let permissions: ImagePermissions = bincode::deserialize(&meta_buf)?;
-        let img = image::load_from_memory(&img_buf)?;
+       
+        // 2. Load the CLIENT'S image (this will be embedded)
+        let client_img = image::load_from_memory(&img_buf)?;
+       
+        // 3. Convert client's image to bytes for embedding
+        let mut client_img_bytes = Vec::new();
+        client_img.write_to(
+            &mut Cursor::new(&mut client_img_bytes),
+            ImageOutputFormat::Png
+        )?;
 
-        // This blocking I/O won't block heartbeats anymore
-        let unified_image_bytes = fs::read("unified_image.png")?;
+        // ✅ SAVE THE LENGTH BEFORE MOVING
+        let client_img_size = client_img_bytes.len();
 
+        // 4. Load the SERVER'S DEFAULT image (this will be the CARRIER)
+        let default_image_path = "unified_image.png";
+        let default_img = image::open(default_image_path)?;
+       
+        // ✅ Log using saved size
+        info!("Embedding client image ({} bytes) + metadata into server's default image",
+              client_img_size);
+
+        // 5. Create combined payload: metadata + client's image
         let combined_payload = CombinedPayload {
             permissions,
-            unified_image: unified_image_bytes,
+            unified_image: client_img_bytes,  // ✅ Move happens here
         };
-        
+       
+        // 6. Serialize the combined payload
         let final_payload = bincode::serialize(&combined_payload)?;
-        let encoded_img = lsb::encode(&img, &final_payload)?;
-        
-        // Simulate work
-        // std::thread::sleep(std::time::Duration::from_secs(5));
-        
+       
+        info!("Total payload size to embed: {} bytes ({:.2} KB)",
+              final_payload.len(),
+              final_payload.len() as f64 / 1024.0);
+       
+        // ============================================================
+        // CAPACITY CHECK BEFORE EMBEDDING
+        // ============================================================
+        let (width, height) = default_img.dimensions();
+        let available_capacity = (width * height * 3) as usize; // 3 bits per pixel (RGB)
+        let required_capacity = final_payload.len() * 8; // 8 bits per byte
+       
+        if required_capacity > available_capacity {
+            let min_pixels = required_capacity / 3;
+            let min_dimension = (min_pixels as f64).sqrt().ceil() as u32;
+           
+            bail!(
+                "Default image too small! Required: {} bits ({:.2} KB payload), \
+                 Available: {} bits. \
+                 Minimum default image size needed: {}x{} pixels (current: {}x{})",
+                required_capacity,
+                final_payload.len() as f64 / 1024.0,
+                available_capacity,
+                min_dimension,
+                min_dimension,
+                width,
+                height
+            );
+        }
+       
+        info!("Capacity check passed: {} bits needed, {} bits available",
+              required_capacity, available_capacity);
+       
+        // 7. Embed payload into SERVER'S DEFAULT IMAGE (the carrier)
+        let encoded_img = lsb::encode(&default_img, &final_payload)?;
+       
+        // 8. Convert to PNG bytes for transmission
         let mut out_buf = Vec::new();
         encoded_img.write_to(&mut Cursor::new(&mut out_buf), ImageOutputFormat::Png)?;
-        
+       
+        info!("Encrypted image created: {} bytes ({:.2} KB)",
+              out_buf.len(),
+              out_buf.len() as f64 / 1024.0);
+       
         Ok::<Vec<u8>, anyhow::Error>(out_buf)
     })
     .await?

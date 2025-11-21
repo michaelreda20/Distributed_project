@@ -365,20 +365,20 @@ fn handle_view(input_path: &PathBuf, current_user: &String) -> Result<()> {
     println!("Viewing user: {}", current_user);
     println!("Viewing image: {}", input_path.display());
 
-    // Load the encrypted image
+    // Load the encrypted image (server's default image with embedded data)
     let img_data = fs::read(input_path)?;
-    let encoded_img = image::load_from_memory(&img_data)?;
+    let carrier_img = image::load_from_memory(&img_data)?;
 
-    // Decode embedded payload
-    let payload = lsb::decode(&encoded_img)?
+    // Decode embedded payload from the carrier (server's default image)
+    let payload = lsb::decode(&carrier_img)?
         .ok_or_else(|| anyhow::anyhow!("No hidden metadata found!"))?;
 
     // Deserialize the CombinedPayload
     let combined_data: CombinedPayload = bincode::deserialize(&payload)?;
 
-    // Extract permissions and unified image
+    // Extract permissions and CLIENT'S ORIGINAL IMAGE
     let mut permissions = combined_data.permissions;
-    let unified_image_bytes = combined_data.unified_image;
+    let client_image_bytes = combined_data.unified_image;
 
     println!("Decoded metadata before view: {:#?}", permissions);
 
@@ -400,37 +400,48 @@ fn handle_view(input_path: &PathBuf, current_user: &String) -> Result<()> {
     };
 
     if has_access {
-        // Save the viewable image
-        encoded_img.save(VIEWABLE_OUTPUT_IMAGE)?;
-        println!("Saved viewable image to '{}'", VIEWABLE_OUTPUT_IMAGE);
+        // ===== AUTHORIZED ACCESS =====
+       
+        // Save the CLIENT'S ORIGINAL IMAGE for viewing
+        fs::write(VIEWABLE_OUTPUT_IMAGE, &client_image_bytes)?;
+        println!("Saved viewable image (your original image) to '{}'", VIEWABLE_OUTPUT_IMAGE);
 
         println!(
             "Updated views left (for next peer): {}",
             permissions.quotas.get(current_user).unwrap_or(&0)
         );
 
-        // Re-create the CombinedPayload with updated permissions
+        // Re-create the CombinedPayload with UPDATED permissions
         let updated_combined_payload = CombinedPayload {
             permissions,
-            unified_image: unified_image_bytes,
+            unified_image: client_image_bytes,
         };
 
-        // Re-encode back into the image
+        // Re-encode the UPDATED payload back into the CARRIER image
         let updated_payload = bincode::serialize(&updated_combined_payload)?;
-        let updated_img = lsb::encode(&encoded_img, &updated_payload)?;
-        updated_img.save(input_path)?;
-        
+        let updated_carrier = lsb::encode(&carrier_img, &updated_payload)?;
+       
+        // Save the updated carrier image back to the original path
+        updated_carrier.save(input_path)?;
+       
         println!(
             "Re-embedded updated metadata back into -> '{}'",
             input_path.display()
         );
     } else {
-        // Save the "Access Denied" image
-        fs::write(VIEWABLE_OUTPUT_IMAGE, unified_image_bytes)?;
-        println!(
-            "Saved default 'Access Denied' image to '{}'",
-            VIEWABLE_OUTPUT_IMAGE
-        );
+        // ===== ACCESS DENIED =====
+       
+        println!("Access denied - cannot display original image");
+       
+        // DON'T save the carrier image to VIEWABLE_OUTPUT_IMAGE
+        // Instead, show what's visible in the carrier (server's default image)
+        // The carrier IS the server's default image, so just save it directly
+        carrier_img.save(VIEWABLE_OUTPUT_IMAGE)?;
+        println!("Saved carrier/default image to '{}' (hidden data remains encrypted)", VIEWABLE_OUTPUT_IMAGE);
+       
+        // CRITICAL: Don't modify the encrypted image file at all!
+        // The input_path file should remain completely unchanged
+        println!("Encrypted image '{}' remains unchanged (no access granted)", input_path.display());
     }
 
     Ok(())
