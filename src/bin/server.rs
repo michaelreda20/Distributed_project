@@ -854,9 +854,9 @@ async fn main() -> Result<()> {
     let raft_config = RaftConfig {
         server_id: server_id.clone(),
         peers: raft_peers,
-        election_timeout_min: 4000,
-        election_timeout_max: 10000,
-        heartbeat_interval: 2000,
+        election_timeout_min: 4000,  // 4 seconds (conservative for network reliability)
+        election_timeout_max: 10000, // 10 seconds
+        heartbeat_interval: 2000,    // 2 seconds
     };
 
     // Create and start Raft node
@@ -906,26 +906,28 @@ async fn main() -> Result<()> {
         info!("Waiting for initial Raft election/stabilization...");
         
         // Wait and check leadership multiple times to handle dynamic elections
-        for attempt in 1..=4 {
-            tokio::time::sleep(Duration::from_secs(6)).await;
+        // With 4-10s election timeouts: 3 elections × ~7s ≈ 21s
+        // Check every 5s to provide status updates
+        for attempt in 1..=5 {
+            tokio::time::sleep(Duration::from_secs(5)).await;
             
             if raft_node.is_leader().await {
-                info!("✓ This server is now the LEADER (stabilized after {}s)", attempt * 6);
+                info!("✓ This server is now the LEADER (stabilized after {}s)", attempt * 5);
                 break;
             } else {
                 let leader_id = raft_node.get_leader_id().await;
                 if let Some(leader) = &leader_id {
-                    info!("This server is a FOLLOWER - current leader: {} (check {}/4)", leader, attempt);
+                    info!("This server is a FOLLOWER - current leader: {} (check {}/5)", leader, attempt);
                 } else {
-                    info!("No leader elected yet (check {}/4) - elections continuing...", attempt);
+                    info!("No leader elected yet (check {}/5) - elections continuing...", attempt);
                 }
                 
                 // On last attempt, give final status
-                if attempt == 4 {
+                if attempt == 5 {
                     if leader_id.is_some() {
                         info!("Election stabilized - this server is a FOLLOWER");
                     } else {
-                        info!("⚠ No stable leader after 24s - cluster may be partitioned");
+                        info!("⚠ No stable leader after 25s - cluster may be partitioned");
                     }
                 }
             }
@@ -1159,7 +1161,9 @@ async fn handle_client_with_load_balancing(
     // Check if this server is the leader (with retry for leader election)
     // In single-node scenarios, Raft will auto-elect this server as leader
     // During leader transitions, wait for election to complete
-    let max_leader_wait_attempts = 3;
+    // Elections take ~7s each, 3 elections = ~21s max
+    // Check every 3s for quicker response once leader is elected
+    let max_leader_wait_attempts = 8;  // 8 attempts × 3s = 24s max wait
     let mut is_leader = false;
     
     for attempt in 1..=max_leader_wait_attempts {
@@ -1176,7 +1180,7 @@ async fn handle_client_with_load_balancing(
             if leader_id.is_none() {
                 info!("No leader elected yet (attempt {}/{}), waiting for election...", 
                       attempt, max_leader_wait_attempts);
-                tokio::time::sleep(Duration::from_secs(8)).await;
+                tokio::time::sleep(Duration::from_secs(3)).await;
                 continue;
             } else {
                 // There is a leader, but it's not us - reject immediately
@@ -1312,7 +1316,11 @@ async fn request_metrics_from_peer(peer_addr: &str) -> Result<ServerMetrics> {
     let metrics_port = base_port + METRICS_PORT_OFFSET;
     let metrics_addr = format!("{}:{}", parts[0], metrics_port);
     
-    let mut stream = TcpStream::connect(&metrics_addr).await?;
+    // Add timeout to prevent hanging on dead peers
+    let connect_future = TcpStream::connect(&metrics_addr);
+    let mut stream = tokio::time::timeout(Duration::from_secs(2), connect_future)
+        .await
+        .map_err(|_| anyhow::anyhow!("Connection timeout to {}", metrics_addr))??;
     
     // Send metrics request
     let request = LoadBalancingMessage::MetricsRequest;
@@ -1323,10 +1331,17 @@ async fn request_metrics_from_peer(peer_addr: &str) -> Result<ServerMetrics> {
     stream.write_all(bytes).await?;
     stream.flush().await?;
     
-    // Read response
-    let response_len = stream.read_u32().await?;
-    let mut response_buf = vec![0u8; response_len as usize];
-    stream.read_exact(&mut response_buf).await?;
+    // Read response with timeout
+    let read_future = async {
+        let response_len = stream.read_u32().await?;
+        let mut response_buf = vec![0u8; response_len as usize];
+        stream.read_exact(&mut response_buf).await?;
+        Ok::<Vec<u8>, anyhow::Error>(response_buf)
+    };
+    
+    let response_buf = tokio::time::timeout(Duration::from_secs(2), read_future)
+        .await
+        .map_err(|_| anyhow::anyhow!("Read timeout from {}", metrics_addr))??;
     
     let response: LoadBalancingMessage = serde_json::from_slice(&response_buf)?;
     
@@ -1348,7 +1363,12 @@ async fn forward_work_to_address(
     let work_addr = format!("{}:{}", parts[0], work_port);
     
     info!("Connecting to work receiver at {}", work_addr);
-    let mut stream = TcpStream::connect(&work_addr).await?;
+    
+    // Add timeout to prevent hanging on dead peers
+    let connect_future = TcpStream::connect(&work_addr);
+    let mut stream = tokio::time::timeout(Duration::from_secs(5), connect_future)
+        .await
+        .map_err(|_| anyhow::anyhow!("Connection timeout to {}", work_addr))??;
     
     // Send forwarded work
     let message = LoadBalancingMessage::ForwardWork {
@@ -1364,10 +1384,17 @@ async fn forward_work_to_address(
     
     info!("Work forwarded, waiting for result...");
     
-    // Receive result
-    let result_len = stream.read_u32().await?;
-    let mut result_buf = vec![0u8; result_len as usize];
-    stream.read_exact(&mut result_buf).await?;
+    // Receive result with timeout
+    let read_future = async {
+        let result_len = stream.read_u32().await?;
+        let mut result_buf = vec![0u8; result_len as usize];
+        stream.read_exact(&mut result_buf).await?;
+        Ok::<Vec<u8>, anyhow::Error>(result_buf)
+    };
+    
+    let result_buf = tokio::time::timeout(Duration::from_secs(30), read_future)
+        .await
+        .map_err(|_| anyhow::anyhow!("Read timeout from {}", work_addr))??;
     
     let response: LoadBalancingMessage = serde_json::from_slice(&result_buf)?;
     
@@ -1467,4 +1494,3 @@ async fn process_encryption_work(meta_buf: &[u8], img_buf: &[u8]) -> Result<Vec<
     })
     .await?
 }
-
