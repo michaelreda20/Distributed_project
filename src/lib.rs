@@ -2,9 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-// This line makes our custom lsb.rs file available as a module.
+// This line makes our custom modules available
 pub mod lsb;
 pub mod raft;
+pub mod directory_service;
+pub mod p2p_protocol;
 
 /// The address the server will listen on.
 pub const ADDR: &str = "10.40.7.1:8080";

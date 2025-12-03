@@ -1431,7 +1431,7 @@ async fn process_encryption_work(meta_buf: &[u8], img_buf: &[u8]) -> Result<Vec<
         let client_img_size = client_img_bytes.len();
 
         // 4. Load the SERVER'S DEFAULT image (this will be the CARRIER)
-        let default_image_path = "unified_image.png";
+        let default_image_path = "src/unified_image.png";
         let default_img = image::open(default_image_path)?;
        
         // ✅ Log using saved size

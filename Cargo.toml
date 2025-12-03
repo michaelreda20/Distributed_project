@@ -28,3 +28,7 @@ log = "0.4"
 env_logger = "0.11"
 
 libc = "0.2"
+
+ [[bin]]
+   name = "directory_server"
+   path = "src/bin/directory_server.rs"

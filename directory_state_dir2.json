@@ -1,0 +1,34 @@
+{
+  "bob": {
+    "username": "bob",
+    "p2p_address": "0.0.0.0:8002",
+    "last_heartbeat": {
+      "secs_since_epoch": 1764778830,
+      "nanos_since_epoch": 198437472
+    },
+    "status": "Online",
+    "shared_images": [
+      {
+        "image_id": "encrypted_vacation.png",
+        "image_name": "encrypted_vacation.png",
+        "thumbnail_path": null
+      }
+    ]
+  },
+  "alice": {
+    "username": "alice",
+    "p2p_address": "0.0.0.0:8001",
+    "last_heartbeat": {
+      "secs_since_epoch": 1764778413,
+      "nanos_since_epoch": 205004252
+    },
+    "status": "Offline",
+    "shared_images": [
+      {
+        "image_id": "encrypted_photo1.png",
+        "image_name": "encrypted_photo1.png",
+        "thumbnail_path": null
+      }
+    ]
+  }
+}

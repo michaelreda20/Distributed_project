@@ -1,0 +1,14 @@
+/home/freddy/UNI/Fall 2025/Distebuted/Distributed_project/target/release/deps/serde-60e95b84b2c2e9e5.d: /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/freddy/UNI/Fall\ 2025/Distebuted/Distributed_project/target/release/build/serde-cfe125327cacaf16/out/private.rs
+
+/home/freddy/UNI/Fall 2025/Distebuted/Distributed_project/target/release/deps/libserde-60e95b84b2c2e9e5.rlib: /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/freddy/UNI/Fall\ 2025/Distebuted/Distributed_project/target/release/build/serde-cfe125327cacaf16/out/private.rs
+
+/home/freddy/UNI/Fall 2025/Distebuted/Distributed_project/target/release/deps/libserde-60e95b84b2c2e9e5.rmeta: /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/freddy/UNI/Fall\ 2025/Distebuted/Distributed_project/target/release/build/serde-cfe125327cacaf16/out/private.rs
+
+/home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/freddy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/freddy/UNI/Fall\ 2025/Distebuted/Distributed_project/target/release/build/serde-cfe125327cacaf16/out/private.rs:
+
+# env-dep:OUT_DIR=/home/freddy/UNI/Fall 2025/Distebuted/Distributed_project/target/release/build/serde-cfe125327cacaf16/out
