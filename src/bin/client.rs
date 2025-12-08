@@ -24,9 +24,9 @@ const SERVER_CONFIG_FILE: &str = "servers.conf";
 
 // List of all directory servers for multicast
 const DIRECTORY_SERVERS: &[&str] = &[
-    "127.0.0.1:9000",
-    "127.0.0.1:9001",
-    "127.0.0.1:9002",
+    "10.7.57.239:9000",
+    "10.7.57.240:9000",
+    "10.7.57.99:9000",
 ];
 
 #[derive(Parser)]
@@ -760,6 +760,7 @@ async fn handle_start_peer(
 
     // Register with directory service (with multicast support)
     // Use 127.0.0.1 instead of 0.0.0.0 so other peers can connect
+    //CHANGEEEEE
     let p2p_address = format!("127.0.0.1:{}", port);
     let register_msg = DirectoryMessage::Register {
         username: username.to_string(),
