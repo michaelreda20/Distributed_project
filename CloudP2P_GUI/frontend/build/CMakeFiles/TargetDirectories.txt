@@ -1,4 +1,0 @@
-/home/andrewwassem@auc.egy/Distributed_project/CloudP2P_GUI/frontend/build/CMakeFiles/CloudP2PClient.dir
-/home/andrewwassem@auc.egy/Distributed_project/CloudP2P_GUI/frontend/build/CMakeFiles/edit_cache.dir
-/home/andrewwassem@auc.egy/Distributed_project/CloudP2P_GUI/frontend/build/CMakeFiles/rebuild_cache.dir
-/home/andrewwassem@auc.egy/Distributed_project/CloudP2P_GUI/frontend/build/CMakeFiles/CloudP2PClient_autogen.dir

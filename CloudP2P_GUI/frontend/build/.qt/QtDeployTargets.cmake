@@ -1,2 +1,0 @@
-set(__QT_DEPLOY_TARGET_CloudP2PClient_FILE /home/andrewwassem@auc.egy/Distributed_project/CloudP2P_GUI/frontend/build/CloudP2PClient)
-set(__QT_DEPLOY_TARGET_CloudP2PClient_TYPE EXECUTABLE)
