@@ -305,18 +305,8 @@ async fn handle_p2p_request(
             println!("👁  Views granted: {}", requested_views);
             println!("========================================\n");
 
-            // Save the image to the user's images directory
-            let images_dir = PathBuf::from(format!("test_images/{}", owner_username));
-
-            // Create directory if it doesn't exist
-            if !images_dir.exists() {
-                if let Err(e) = fs::create_dir_all(&images_dir) {
-                    error!("Failed to create images directory: {}", e);
-                    println!("⚠ Warning: Could not create directory {}", images_dir.display());
-                }
-            }
-
-            let save_path = images_dir.join(format!("from_{}.png", from_owner));
+            // Save the image to the current directory with naming: from_{owner}_{requester}.png
+            let save_path = PathBuf::from(format!("from_{}_{}.png", from_owner, owner_username));
 
             match fs::write(&save_path, &encrypted_image) {
                 Ok(_) => {
@@ -371,8 +361,8 @@ async fn handle_p2p_request(
                     message: format!("Permission update is for user '{}', not '{}'", for_user, owner_username),
                 }
             } else {
-                // Find the local image file: from_{owner}.png
-                let local_image_path = PathBuf::from(format!("test_images/{}/from_{}.png", owner_username, from_owner));
+                // Find the local image file: from_{owner}_{requester}.png in current directory
+                let local_image_path = PathBuf::from(format!("from_{}_{}.png", from_owner, owner_username));
 
                 if !local_image_path.exists() {
                     println!("❌ Local image not found: {}", local_image_path.display());

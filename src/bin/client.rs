@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use bincode;
 use cloud_p2p_project::directory_service::{DirectoryMessage, ImageInfo, send_directory_message};
 use cloud_p2p_project::p2p_protocol::{
-    ImageMetadata, PeerImageStore, request_image_from_peer, 
+    ImageMetadata, PeerImageStore, 
     list_peer_images, start_p2p_server,
 };
 use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions};
@@ -103,10 +103,6 @@ enum Commands {
         /// Number of views requested
         #[arg(short, long)]
         views: u32,
-        
-        /// Output file path
-        #[arg(short, long)]
-        output: PathBuf,
         
         /// Directory service address (optional, will multicast if not specified)
         #[arg(short, long)]
@@ -247,10 +243,9 @@ async fn main() -> Result<()> {
             peer,
             image_id,
             views,
-            output,
             directory,
         } => {
-            handle_request_image(username, peer, image_id, *views, output, directory.as_deref()).await?;
+            handle_request_image(username, peer, image_id, *views, directory.as_deref()).await?;
         }
         Commands::ListPeerImages {
             username,
@@ -858,87 +853,106 @@ async fn handle_start_peer(
             if updates.is_empty() {
                 println!("✓ No pending permission updates");
             } else {
-                println!("🔔 Applying {} pending permission update(s)...", updates.len());
+                println!("🔔 Processing {} pending permission update(s)...", updates.len());
 
                 for upd in updates {
                     println!("  • Update from {} for image {} -> {} views",
                              upd.from_owner, upd.image_id, upd.new_quota);
 
-                    // Try to find the local image path in the image_store
-                    let maybe_path = {
-                        let store = image_store.read().await;
-                        store.get_image_path(&upd.image_id).cloned()
-                    };
-
-                    if let Some(path) = maybe_path {
-                        // Read file, decode, modify quota for this user, re-encode and save atomically
-                        match std::fs::read(&path) {
-                            Ok(buf) => match image::load_from_memory(&buf) {
-                                Ok(img) => {
-                                    match lsb::decode(&img) {
-                                        Ok(Some(payload)) => {
-                                            match bincode::deserialize::<CombinedPayload>(&payload) {
-                                                Ok(mut combined) => {
-                                                    combined.permissions.quotas.insert(username.to_string(), upd.new_quota);
-
-                                                    match bincode::serialize(&combined) {
-                                                        Ok(new_payload) => match lsb::encode(&img, &new_payload) {
-                                                            Ok(updated_carrier) => {
-                                                                // Atomic save: write to temp file then rename
-                                                                // Keep .png extension so image crate recognizes format
-                                                                let tmp = path.with_file_name(format!(
-                                                                    "{}.pending_update_tmp.png",
-                                                                    path.file_stem().unwrap_or_default().to_string_lossy()
-                                                                ));
-                                                                if let Err(e) = updated_carrier.save(&tmp) {
-                                                                    eprintln!("Failed to save temp updated image for {}: {}", path.display(), e);
-                                                                    let _ = std::fs::remove_file(&tmp);
-                                                                    continue;
-                                                                }
-                                                                if let Err(e) = std::fs::rename(&tmp, &path) {
-                                                                    eprintln!("Failed to rename temp updated image into place for {}: {}", path.display(), e);
-                                                                    let _ = std::fs::remove_file(&tmp);
-                                                                    continue;
-                                                                }
-
-                                                                println!("    ✓ Applied update to {} (now {} views)", upd.image_id, upd.new_quota);
-                                                            }
-                                                            Err(e) => {
-                                                                eprintln!("Failed to encode updated payload for {}: {}", upd.image_id, e);
-                                                            }
-                                                        },
-                                                        Err(e) => {
-                                                            eprintln!("Failed to serialize updated payload for {}: {}", upd.image_id, e);
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("Failed to deserialize payload for {}: {}", upd.image_id, e);
-                                                }
-                                            }
-                                        }
-                                        Ok(None) => {
-                                            eprintln!("No embedded payload found in {} to apply update", path.display());
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Failed to decode LSB payload in {}: {}", path.display(), e);
-                                        }
-                                    }
+                    // Check if we have an embedded image to save directly
+                    if let Some(embedded_image) = upd.embedded_image {
+                        // Save the image directly as from_{owner}_{username}.png
+                        let save_path = format!("from_{}_{}.png", upd.from_owner, username);
+                        match std::fs::write(&save_path, &embedded_image) {
+                            Ok(()) => {
+                                println!("    ✅ Saved delivered image as '{}'", save_path);
+                                if upd.new_quota == 0 {
+                                    println!("    ⚠ Note: Your access has been REVOKED (0 views)");
+                                } else {
+                                    println!("    ✓ You have {} views available", upd.new_quota);
                                 }
-                                Err(e) => {
-                                    eprintln!("Failed to load image {}: {}", path.display(), e);
-                                }
-                            },
+                            }
                             Err(e) => {
-                                eprintln!("Failed to read local image {}: {}", path.display(), e);
+                                eprintln!("    ❌ Failed to save delivered image: {}", e);
                             }
                         }
                     } else {
-                        println!("    ℹ Local copy of image {} not found; skip applying update", upd.image_id);
+                        // No embedded image - try to apply update to local image (legacy behavior)
+                        let maybe_path = {
+                            let store = image_store.read().await;
+                            store.get_image_path(&upd.image_id).cloned()
+                        };
+
+                        if let Some(path) = maybe_path {
+                            // Read file, decode, modify quota for this user, re-encode and save atomically
+                            match std::fs::read(&path) {
+                                Ok(buf) => match image::load_from_memory(&buf) {
+                                    Ok(img) => {
+                                        match lsb::decode(&img) {
+                                            Ok(Some(payload)) => {
+                                                match bincode::deserialize::<CombinedPayload>(&payload) {
+                                                    Ok(mut combined) => {
+                                                        combined.permissions.quotas.insert(username.to_string(), upd.new_quota);
+
+                                                        match bincode::serialize(&combined) {
+                                                            Ok(new_payload) => match lsb::encode(&img, &new_payload) {
+                                                                Ok(updated_carrier) => {
+                                                                    // Atomic save: write to temp file then rename
+                                                                    // Keep .png extension so image crate recognizes format
+                                                                    let tmp = path.with_file_name(format!(
+                                                                        "{}.pending_update_tmp.png",
+                                                                        path.file_stem().unwrap_or_default().to_string_lossy()
+                                                                    ));
+                                                                    if let Err(e) = updated_carrier.save(&tmp) {
+                                                                        eprintln!("Failed to save temp updated image for {}: {}", path.display(), e);
+                                                                        let _ = std::fs::remove_file(&tmp);
+                                                                        continue;
+                                                                    }
+                                                                    if let Err(e) = std::fs::rename(&tmp, &path) {
+                                                                        eprintln!("Failed to rename temp updated image into place for {}: {}", path.display(), e);
+                                                                        let _ = std::fs::remove_file(&tmp);
+                                                                        continue;
+                                                                    }
+
+                                                                    println!("    ✓ Applied update to {} (now {} views)", upd.image_id, upd.new_quota);
+                                                                }
+                                                                Err(e) => {
+                                                                    eprintln!("Failed to encode updated payload for {}: {}", upd.image_id, e);
+                                                                }
+                                                            },
+                                                            Err(e) => {
+                                                                eprintln!("Failed to serialize updated payload for {}: {}", upd.image_id, e);
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("Failed to deserialize payload for {}: {}", upd.image_id, e);
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => {
+                                                eprintln!("No embedded payload found in {} to apply update", path.display());
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Failed to decode LSB payload in {}: {}", path.display(), e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to load image {}: {}", path.display(), e);
+                                    }
+                                },
+                                Err(e) => {
+                                    eprintln!("Failed to read local image {}: {}", path.display(), e);
+                                }
+                            }
+                        } else {
+                            println!("    ℹ Local copy of image {} not found and no embedded image provided", upd.image_id);
+                        }
                     }
                 }
 
-                println!("🔔 Pending permission updates applied (if local copies existed)");
+                println!("🔔 Pending permission updates processed");
             }
         }
         Err(e) => {
@@ -1030,7 +1044,6 @@ async fn handle_request_image(
     peer_username: &str,
     image_id: &str,
     views: u32,
-    output: &PathBuf,
     directory_addr: Option<&str>,
 ) -> Result<()> {
     println!("=== Requesting Image from Peer ===");
@@ -1057,7 +1070,7 @@ async fn handle_request_image(
                     \n\
                     Your account exists but your P2P peer is offline.\n\
                     You need to start your P2P peer:\n\
-                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                      cargo run --bin client -- start-peer --username {} --port <PORT>\n\
                     \n\
                     This will mark you as online and allow you to request images.",
                     username
@@ -1069,7 +1082,7 @@ async fn handle_request_image(
                 "❌ You must be online to request images!\n\
                 \n\
                 You need to start your P2P peer first:\n\
-                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                  cargo run --bin client -- start-peer --username {} --port <PORT>\n\
                 \n\
                 This will register you with the directory service and allow you to request images.",
                 username
@@ -1174,7 +1187,7 @@ async fn handle_list_peer_images(
                     \n\
                     Your account exists but your P2P peer is offline.\n\
                     You need to start your P2P peer:\n\
-                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                      cargo run --bin client -- start-peer --username {} --port <PORT>",
                     username
                 );
             }
@@ -1184,7 +1197,7 @@ async fn handle_list_peer_images(
                 "❌ You must be online to list peer images!\n\
                 \n\
                 You need to start your P2P peer first:\n\
-                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                  cargo run --bin client -- start-peer --username {} --port <PORT>",
                 username
             );
         }
@@ -1247,6 +1260,40 @@ async fn handle_list_peer_images(
     }
 }
 
+/// Helper function to store a pending permission update with embedded image
+async fn store_pending_update_with_image(
+    directory_addr: Option<&str>,
+    owner: &str,
+    target_user: &str,
+    image_id: &str,
+    new_quota: u32,
+    encrypted_image: Vec<u8>,
+) {
+    let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
+        from_owner: owner.to_string(),
+        target_user: target_user.to_string(),
+        image_id: image_id.to_string(),
+        new_quota,
+        embedded_image: Some(encrypted_image),
+    };
+
+    match send_directory_or_multicast(directory_addr, pending_msg).await {
+        Ok(DirectoryMessage::StorePendingPermissionUpdateResponse { success: true, message, .. }) => {
+            println!("✅ {}", message);
+            println!("   Image will be delivered as from_{}_{}.png when {} comes online", owner, target_user, target_user);
+        }
+        Ok(DirectoryMessage::StorePendingPermissionUpdateResponse { success: false, message, .. }) => {
+            eprintln!("⚠ Failed to store pending update: {}", message);
+        }
+        Err(e) => {
+            eprintln!("⚠ Failed to store pending update: {}", e);
+        }
+        _ => {
+            eprintln!("⚠ Unexpected response when storing pending update");
+        }
+    }
+}
+
 async fn handle_update_permissions(
     owner: &str,
     image_id: &str,
@@ -1276,7 +1323,7 @@ async fn handle_update_permissions(
             user.p2p_address
         }
         Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
-            bail!("You must be running your P2P server to update permissions.\nStart with: cargo run --bin client -- start-peer --username {} --port <port> --images-dir <dir>", owner);
+            bail!("You must be running your P2P server to update permissions.\nStart with: cargo run --bin client -- start-peer --username {} --port <port>", owner);
         }
         Err(e) => {
             bail!("Error querying directory service: {}", e);
@@ -1287,7 +1334,7 @@ async fn handle_update_permissions(
     };
 
     // Send update permissions request to own P2P server
-    use cloud_p2p_project::p2p_protocol::{P2PMessage, send_p2p_message};
+    use cloud_p2p_project::p2p_protocol::{P2PMessage, send_p2p_message, request_image_from_peer};
 
     let update_msg = P2PMessage::UpdatePermissions {
         owner: owner.to_string(),
@@ -1305,6 +1352,116 @@ async fn handle_update_permissions(
             } else {
                 println!("✓ User '{}' now has {} views", username, new_quota);
             }
+
+            // Now check if the target user is online and send them the updated image
+            println!("\n📤 Checking if {} is online to send updated image...", username);
+            
+            let target_query_msg = DirectoryMessage::QueryUser {
+                username: username.to_string(),
+            };
+
+            match send_directory_or_multicast(directory_addr, target_query_msg).await {
+                Ok(DirectoryMessage::QueryUserResponse { user: Some(target_user) }) => {
+                    use cloud_p2p_project::directory_service::UserStatus;
+                    if target_user.status == UserStatus::Online {
+                        println!("✓ {} is online at {}", username, target_user.p2p_address);
+                        println!("🚀 Fetching updated image to send to {}...", username);
+
+                        // Fetch the updated image from our own P2P server (as owner)
+                        match request_image_from_peer(
+                            &own_addr,
+                            owner,  // Request as owner
+                            image_id,
+                            new_quota,
+                        ).await {
+                            Ok(encrypted_image) => {
+                                println!("✓ Image fetched, now delivering to {}...", username);
+
+                                // Clone the image data in case we need to store it for later
+                                let image_for_fallback = encrypted_image.clone();
+
+                                // Deliver the updated image to the target user
+                                let deliver_msg = P2PMessage::DeliverImage {
+                                    from_owner: owner.to_string(),
+                                    image_id: image_id.to_string(),
+                                    requested_views: new_quota,
+                                    encrypted_image,
+                                };
+
+                                match send_p2p_message(&target_user.p2p_address, deliver_msg).await {
+                                    Ok(P2PMessage::DeliverImageResponse { success: true, message }) => {
+                                        println!("\n✅ Updated image delivered successfully to {}!", username);
+                                        println!("   {}", message);
+                                    }
+                                    Ok(P2PMessage::DeliverImageResponse { success: false, message }) => {
+                                        eprintln!("\n⚠ Failed to deliver updated image: {}", message);
+                                        // Fall back to storing pending update
+                                        println!("📝 Storing update for later delivery...");
+                                        store_pending_update_with_image(directory_addr, owner, username, image_id, new_quota, image_for_fallback).await;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("\n⚠ Could not deliver updated image to {} (may be offline): {}", username, e);
+                                        // Fall back to storing pending update
+                                        println!("📝 Storing update for later delivery...");
+                                        store_pending_update_with_image(directory_addr, owner, username, image_id, new_quota, image_for_fallback).await;
+                                    }
+                                    _ => {
+                                        eprintln!("\n⚠ Unexpected response when delivering image");
+                                        // Fall back to storing pending update
+                                        println!("📝 Storing update for later delivery...");
+                                        store_pending_update_with_image(directory_addr, owner, username, image_id, new_quota, image_for_fallback).await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("\n⚠ Failed to fetch image for delivery: {}", e);
+                            }
+                        }
+                    } else {
+                        println!("ℹ {} is offline. Storing update with image for delivery when they come online...", username);
+                        
+                        // Fetch the updated image to store for later delivery
+                        match request_image_from_peer(
+                            &own_addr,
+                            owner,  // Request as owner
+                            image_id,
+                            new_quota,
+                        ).await {
+                            Ok(encrypted_image) => {
+                                println!("✓ Image fetched, storing for later delivery...");
+                                store_pending_update_with_image(directory_addr, owner, username, image_id, new_quota, encrypted_image).await;
+                            }
+                            Err(e) => {
+                                eprintln!("⚠ Failed to fetch image for storage: {}", e);
+                            }
+                        }
+                    }
+                }
+                Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+                    println!("ℹ {} is not registered. Storing update with image for delivery when they register...", username);
+                    
+                    // Fetch the updated image to store for later delivery
+                    match request_image_from_peer(
+                        &own_addr,
+                        owner,  // Request as owner
+                        image_id,
+                        new_quota,
+                    ).await {
+                        Ok(encrypted_image) => {
+                            println!("✓ Image fetched, storing for later delivery...");
+                            store_pending_update_with_image(directory_addr, owner, username, image_id, new_quota, encrypted_image).await;
+                        }
+                        Err(e) => {
+                            eprintln!("⚠ Failed to fetch image for storage: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("⚠ Could not check if {} is online: {}", username, e);
+                }
+                _ => {}
+            }
+
             Ok(())
         }
         Ok(P2PMessage::UpdatePermissionsResponse { success: false, message }) => {
@@ -1340,7 +1497,7 @@ async fn handle_check_requests(
                     "❌ You must be online to check requests!\n\
                     \n\
                     Start your P2P server first:\n\
-                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                      cargo run --bin client -- start-peer --username {} --port <PORT>\n\
                     \n\
                     Your pending requests will be shown automatically when you come online.",
                     username
@@ -1353,7 +1510,7 @@ async fn handle_check_requests(
                 "❌ You must be online to check requests!\n\
                 \n\
                 Start your P2P server first:\n\
-                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                  cargo run --bin client -- start-peer --username {} --port <PORT>",
                 username
             );
         }
@@ -1436,7 +1593,7 @@ async fn handle_respond_request(
                         "❌ You must be online to accept requests!\n\
                         \n\
                         To accept this request, you need to start your P2P server:\n\
-                          cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                          cargo run --bin client -- start-peer --username {} --port <PORT>\n\
                         \n\
                         Then run the respond-request command again.",
                         owner
@@ -1449,7 +1606,7 @@ async fn handle_respond_request(
                     "❌ You must be online to accept requests!\n\
                     \n\
                     Start your P2P server first:\n\
-                    cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                    cargo run --bin client -- start-peer --username {} --port <PORT>",
                     owner
                 );
             }
@@ -1702,7 +1859,7 @@ async fn handle_remote_update_permissions(
                     "❌ You must be online to send remote permission updates!\n\
                     \n\
                     Start your P2P server first:\n\
-                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                      cargo run --bin client -- start-peer --username {} --port <PORT>",
                     owner
                 );
             }
@@ -1734,7 +1891,7 @@ async fn handle_remote_update_permissions(
                 Error: {}\n\
                 \n\
                 Start your P2P server first:\n\
-                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                  cargo run --bin client -- start-peer --username {} --port <PORT>",
                 owner_p2p_addr, e, owner
             );
         }
@@ -1743,7 +1900,7 @@ async fn handle_remote_update_permissions(
                 "❌ Connection timeout: Your P2P server is not responding at {}!\n\
                 \n\
                 Start your P2P server first:\n\
-                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                  cargo run --bin client -- start-peer --username {} --port <PORT>",
                 owner_p2p_addr, owner
             );
         }
@@ -1783,15 +1940,36 @@ async fn handle_remote_update_permissions(
     };
 
     if is_offline || is_unreachable {
-        // User is offline or unreachable - store pending update
+        // User is offline or unreachable - store pending update with the embedded image
         println!("⚠  Target user '{}' is currently offline or unreachable.", target_user);
-        println!("📝 Queuing permission update for when they come online...");
+        println!("📝 Fetching image to queue with permission update...");
+
+        // First, fetch the image from our own P2P server with the updated permissions
+        use cloud_p2p_project::p2p_protocol::request_image_from_peer;
+        
+        let embedded_image = match request_image_from_peer(
+            &owner_p2p_addr,
+            owner,  // Request as owner
+            image_id,
+            new_quota,
+        ).await {
+            Ok(image_data) => {
+                println!("✓ Image fetched successfully");
+                Some(image_data)
+            }
+            Err(e) => {
+                eprintln!("⚠ Warning: Could not fetch image: {}", e);
+                eprintln!("  The update will be stored without image data");
+                None
+            }
+        };
 
         let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
             from_owner: owner.to_string(),
             target_user: target_user.to_string(),
             image_id: image_id.to_string(),
             new_quota,
+            embedded_image,
         };
 
         match send_directory_or_multicast(directory_addr, pending_msg).await {
@@ -1799,8 +1977,7 @@ async fn handle_remote_update_permissions(
                 println!("\n✅ Permission update queued successfully!");
                 println!("   {}", message);
                 println!("\n   When '{}' comes online:", target_user);
-                println!("   • They will be notified of the permission change");
-                println!("   • Their local image will be automatically updated");
+                println!("   • The image will be delivered as from_{}_{}.png", owner, target_user);
                 if new_quota == 0 {
                     println!("   • Their access will be revoked (0 views)");
                 } else {

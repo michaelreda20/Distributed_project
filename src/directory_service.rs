@@ -67,6 +67,8 @@ pub struct PendingPermissionUpdate {
     pub image_id: String,
     pub new_quota: u32,
     pub timestamp: SystemTime,
+    /// The embedded image data to deliver when the user comes online
+    pub embedded_image: Option<Vec<u8>>,
 }
 
 /// Directory service messages
@@ -160,6 +162,8 @@ pub enum DirectoryMessage {
         target_user: String,
         image_id: String,
         new_quota: u32,
+        /// The embedded image data to deliver when the user comes online
+        embedded_image: Option<Vec<u8>>,
     },
     StorePendingPermissionUpdateResponse {
         success: bool,
@@ -630,8 +634,11 @@ impl DirectoryServiceState {
         target_user: &str,
         image_id: &str,
         new_quota: u32,
+        embedded_image: Option<Vec<u8>>,
     ) -> String {
         let update_id = format!("{}:{}:{}", from_owner, target_user, image_id);
+        let has_image = embedded_image.is_some();
+        
         let update = PendingPermissionUpdate {
             update_id: update_id.clone(),
             from_owner: from_owner.to_string(),
@@ -639,14 +646,15 @@ impl DirectoryServiceState {
             image_id: image_id.to_string(),
             new_quota,
             timestamp: SystemTime::now(),
+            embedded_image,
         };
 
         let mut updates = self.pending_permission_updates.write().await;
         updates.insert(update_id.clone(), update);
 
         info!(
-            "[{}] Stored pending permission update: {} wants to change {}'s quota for {} to {} views",
-            self.server_id, from_owner, target_user, image_id, new_quota
+            "[{}] Stored pending permission update: {} wants to change {}'s quota for {} to {} views (image attached: {})",
+            self.server_id, from_owner, target_user, image_id, new_quota, has_image
         );
 
         update_id
@@ -865,9 +873,10 @@ async fn handle_directory_client(
             target_user,
             image_id,
             new_quota,
+            embedded_image,
         } => {
             let update_id = state
-                .store_pending_permission_update(&from_owner, &target_user, &image_id, new_quota)
+                .store_pending_permission_update(&from_owner, &target_user, &image_id, new_quota, embedded_image)
                 .await;
 
             state.save_to_disk().await?;
