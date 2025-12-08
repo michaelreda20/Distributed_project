@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use bincode;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,34 @@ pub enum P2PMessage {
     
     /// Response to permission update request
     UpdatePermissionsResponse {
+        success: bool,
+        message: String,
+    },
+
+    /// Deliver image to requester after owner accepts (push model)
+    DeliverImage {
+        from_owner: String,
+        image_id: String,
+        requested_views: u32,
+        encrypted_image: Vec<u8>, // The actual image data with embedded permissions
+    },
+
+    /// Response to image delivery
+    DeliverImageResponse {
+        success: bool,
+        message: String,
+    },
+
+    /// Remote permission update: Owner asks requester to update their local copy's permissions
+    RemoteUpdatePermissions {
+        from_owner: String,
+        image_id: String,
+        for_user: String,
+        new_quota: u32,
+    },
+
+    /// Response to remote permission update
+    RemoteUpdatePermissionsResponse {
         success: bool,
         message: String,
     },
@@ -122,10 +150,11 @@ pub async fn start_p2p_server(
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
-                info!("P2P connection from {}", addr);
+                info!("Received P2P connection from {}", addr);
+                println!("[INFO] Received P2P connection from {}", addr);
                 let username_clone = username.clone();
                 let store_clone = image_store.clone();
-                
+
                 tokio::spawn(async move {
                     if let Err(e) = handle_p2p_request(stream, username_clone, store_clone).await {
                         error!("Error handling P2P request from {}: {}", addr, e);
@@ -160,26 +189,53 @@ async fn handle_p2p_request(
             requested_views,
         } => {
             info!(
-                "Received image request from {} for image {} with {} views",
+                "Image request from {} for {} ({} views)",
                 requesting_user, image_id, requested_views
             );
-            
-            handle_image_request(
+            println!(
+                "[INFO] Image request from {} for {} ({} views)",
+                requesting_user, image_id, requested_views
+            );
+
+            let response = handle_image_request(
                 &owner_username,
                 &requesting_user,
                 &image_id,
                 requested_views,
                 &image_store,
             )
-            .await
+            .await;
+
+            // Log the result
+            match &response {
+                P2PMessage::ImageResponse { success: true, .. } => {
+                    info!("✓ Granted access to {}", requesting_user);
+                    println!("[INFO] ✓ Granted access to {}", requesting_user);
+                }
+                P2PMessage::ImageResponse { success: false, message, .. } => {
+                    info!("✗ Denied access to {}: {}", requesting_user, message);
+                    println!("[INFO] ✗ Denied access to {}: {}", requesting_user, message);
+                }
+                _ => {}
+            }
+
+            response
         }
         
         P2PMessage::ListImages { requesting_user } => {
-            info!("Received list images request from {}", requesting_user);
-            
+            // Only log if it's not a self-request (connectivity check)
+            if requesting_user != owner_username {
+                info!("List images request from {}", requesting_user);
+                println!("[INFO] List images request from {}", requesting_user);
+            }
+
             let store = image_store.read().await;
             let images = store.get_all_metadata();
-            
+
+            if requesting_user != owner_username {
+                println!("[INFO] Sending {} images to {}", images.len(), requesting_user);
+            }
+
             P2PMessage::ListImagesResponse { images }
         }
         
@@ -190,21 +246,176 @@ async fn handle_p2p_request(
             new_quota,
         } => {
             info!(
-                "Received update permissions request from {} for user {} on image {} -> {} views",
+                "Update permissions request from {} for user {} on image {} -> {} views",
                 owner, username, image_id, new_quota
             );
-            
+            println!(
+                "[INFO] Update permissions request from {} for user {} on {} -> {} views",
+                owner, username, image_id, new_quota
+            );
+
             // Verify the requester is the owner
             if owner != owner_username {
+                println!("[INFO] ✗ Denied - only owner can update permissions");
                 P2PMessage::UpdatePermissionsResponse {
                     success: false,
                     message: "Only the owner can update permissions".to_string(),
                 }
             } else {
-                handle_update_permissions(&image_id, &username, new_quota, &image_store).await
+                let response = handle_update_permissions(&image_id, &username, new_quota, &image_store).await;
+
+                // Log the result
+                match &response {
+                    P2PMessage::UpdatePermissionsResponse { success: true, .. } => {
+                        if new_quota == 0 {
+                            info!("✓ Revoked access for {}", username);
+                            println!("[INFO] ✓ Revoked access for {} on {}", username, image_id);
+                        } else {
+                            info!("✓ Updated {} to {} views", username, new_quota);
+                            println!("[INFO] ✓ Updated {} to {} views on {}", username, new_quota, image_id);
+                        }
+                    }
+                    P2PMessage::UpdatePermissionsResponse { success: false, message } => {
+                        info!("✗ Failed to update permissions: {}", message);
+                        println!("[INFO] ✗ Failed: {}", message);
+                    }
+                    _ => {}
+                }
+
+                response
             }
         }
-        
+
+        P2PMessage::DeliverImage {
+            from_owner,
+            image_id,
+            requested_views,
+            encrypted_image,
+        } => {
+            info!(
+                "Receiving image delivery from {} for image {} ({} views)",
+                from_owner, image_id, requested_views
+            );
+            println!(
+                "\n🎉 ========================================");
+            println!("   IMAGE DELIVERED!");
+            println!("========================================");
+            println!("📥 Received: {}", image_id);
+            println!("👤 From: {}", from_owner);
+            println!("👁  Views granted: {}", requested_views);
+            println!("========================================\n");
+
+            // Save the image to the user's images directory
+            let images_dir = PathBuf::from(format!("test_images/{}", owner_username));
+
+            // Create directory if it doesn't exist
+            if !images_dir.exists() {
+                if let Err(e) = fs::create_dir_all(&images_dir) {
+                    error!("Failed to create images directory: {}", e);
+                    println!("⚠ Warning: Could not create directory {}", images_dir.display());
+                }
+            }
+
+            let save_path = images_dir.join(format!("from_{}.png", from_owner));
+
+            match fs::write(&save_path, &encrypted_image) {
+                Ok(_) => {
+                    let file_size = encrypted_image.len() / 1024;
+                    println!("✅ Image saved to: {}", save_path.display());
+                    println!("📊 Size: {} KB", file_size);
+                    println!("\n💡 You can now view the image with:");
+                    println!("   cargo run --bin client -- view --input {} --user {}",
+                             save_path.display(), owner_username);
+
+                    P2PMessage::DeliverImageResponse {
+                        success: true,
+                        message: format!("Image '{}' delivered and saved to {}", image_id, save_path.display()),
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to save delivered image: {}", e);
+                    println!("❌ Failed to save image: {}", e);
+
+                    P2PMessage::DeliverImageResponse {
+                        success: false,
+                        message: format!("Failed to save image: {}", e),
+                    }
+                }
+            }
+        }
+
+        P2PMessage::RemoteUpdatePermissions {
+            from_owner,
+            image_id,
+            for_user,
+            new_quota,
+        } => {
+            info!(
+                "Remote permission update from {} for user {} on image {} -> {} views",
+                from_owner, for_user, image_id, new_quota
+            );
+            println!("\n🔄 ========================================");
+            println!("   PERMISSION UPDATE RECEIVED!");
+            println!("========================================");
+            println!("📥 From owner: {}", from_owner);
+            println!("🖼  Image: {}", image_id);
+            println!("👤 For user: {}", for_user);
+            println!("👁  New quota: {} views", new_quota);
+            println!("========================================\n");
+
+            // Verify this update is for the current user
+            if for_user != owner_username {
+                println!("⚠ This update is not for you (it's for {})", for_user);
+                P2PMessage::RemoteUpdatePermissionsResponse {
+                    success: false,
+                    message: format!("Permission update is for user '{}', not '{}'", for_user, owner_username),
+                }
+            } else {
+                // Find the local image file: from_{owner}.png
+                let local_image_path = PathBuf::from(format!("test_images/{}/from_{}.png", owner_username, from_owner));
+
+                if !local_image_path.exists() {
+                    println!("❌ Local image not found: {}", local_image_path.display());
+                    P2PMessage::RemoteUpdatePermissionsResponse {
+                        success: false,
+                        message: format!("Image not found locally: {}", local_image_path.display()),
+                    }
+                } else {
+                    println!("🔍 Found local image: {}", local_image_path.display());
+                    println!("🔧 Updating embedded permissions...");
+
+                    // Re-encrypt the image with new permissions
+                    match update_local_image_permissions(&local_image_path, &for_user, new_quota) {
+                        Ok(()) => {
+                            if new_quota == 0 {
+                                println!("\n✅ Permission revoked!");
+                                println!("   You can no longer view this image.");
+                                P2PMessage::RemoteUpdatePermissionsResponse {
+                                    success: true,
+                                    message: format!("Permissions revoked. Image '{}' access removed.", image_id),
+                                }
+                            } else {
+                                println!("\n✅ Permissions updated successfully!");
+                                println!("   You now have {} views remaining.", new_quota);
+                                P2PMessage::RemoteUpdatePermissionsResponse {
+                                    success: true,
+                                    message: format!("Permissions updated. You now have {} views for '{}'", new_quota, image_id),
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to update local permissions: {}", e);
+                            println!("❌ Failed to update permissions: {}", e);
+                            P2PMessage::RemoteUpdatePermissionsResponse {
+                                success: false,
+                                message: format!("Failed to update local image: {}", e),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         _ => {
             bail!("Unexpected P2P message type");
         }
@@ -301,18 +512,59 @@ async fn handle_image_request(
             };
         }
     };
-    
-    // Update permissions - add the requesting user with the specified quota
-    combined_data
-        .permissions
-        .quotas
-        .insert(requesting_user.to_string(), requested_views);
-    
-    info!(
-        "Granted {} views to {} for image {}",
-        requested_views, requesting_user, image_id
-    );
-    
+
+    // Check if requesting user is the owner - owners don't consume quota
+    let is_owner = requesting_user == &combined_data.permissions.owner;
+
+    if !is_owner {
+        // Only enforce and decrement quota for non-owners
+        let existing_quota = combined_data.permissions.quotas.get(requesting_user).copied();
+
+        match existing_quota {
+            Some(0) => {
+                // User was explicitly revoked (quota = 0)
+                info!("Denied {} - access was revoked by owner", requesting_user);
+                return P2PMessage::ImageResponse {
+                    success: false,
+                    message: format!("Access denied. Owner has revoked your permissions."),
+                    encrypted_image: None,
+                };
+            }
+            Some(current_quota) => {
+                // User already has access — enforce owner's quota and update it atomically.
+                if requested_views > current_quota {
+                    info!("Denied {} - requested {} but only {} remaining", requesting_user, requested_views, current_quota);
+                    return P2PMessage::ImageResponse {
+                        success: false,
+                        message: format!("Requested {} views but only {} available", requested_views, current_quota),
+                        encrypted_image: None,
+                    };
+                }
+
+                // Decrement the stored quota by the number of views being granted now so the owner's update is enforced.
+                let new_quota = current_quota.saturating_sub(requested_views);
+                combined_data
+                    .permissions
+                    .quotas
+                    .insert(requesting_user.to_string(), new_quota);
+
+                info!("Granting {} views to {} (remaining: {})", requested_views, requesting_user, new_quota);
+            }
+            None => {
+                // New user - grant requested access
+                combined_data
+                    .permissions
+                    .quotas
+                    .insert(requesting_user.to_string(), requested_views);
+
+                info!("Granted {} views to {} for image {}", requested_views, requesting_user, image_id);
+            }
+        }
+    } else {
+        // Owner has unlimited access - don't modify quotas
+        info!("Owner {} accessing their own image - unlimited access", requesting_user);
+    }
+
     // Re-serialize and re-encode
     let updated_payload = match bincode::serialize(&combined_data) {
         Ok(data) => data,
@@ -324,7 +576,7 @@ async fn handle_image_request(
             };
         }
     };
-    
+
     let updated_carrier = match lsb::encode(&carrier_img, &updated_payload) {
         Ok(img) => img,
         Err(e) => {
@@ -335,11 +587,20 @@ async fn handle_image_request(
             };
         }
     };
-    
+
+    // Persist the updated carrier back to disk so changes (decrements/revocations) are authoritative
+    if let Err(e) = updated_carrier.save(&image_path) {
+        return P2PMessage::ImageResponse {
+            success: false,
+            message: format!("Failed to save updated image after permission change: {}", e),
+            encrypted_image: None,
+        };
+    }
+
     // Convert to PNG bytes
     use image::ImageOutputFormat;
     use std::io::Cursor;
-    
+
     let mut out_buf = Vec::new();
     if let Err(e) = updated_carrier.write_to(&mut Cursor::new(&mut out_buf), ImageOutputFormat::Png)
     {
@@ -349,7 +610,7 @@ async fn handle_image_request(
             encrypted_image: None,
         };
     }
-    
+
     P2PMessage::ImageResponse {
         success: true,
         message: format!(
@@ -464,6 +725,53 @@ async fn handle_update_permissions(
         success: true,
         message: format!("Updated {} to {} views", username, new_quota),
     }
+}
+
+/// Update permissions in a local image file (used for remote permission updates)
+fn update_local_image_permissions(
+    image_path: &PathBuf,
+    user: &str,
+    new_quota: u32,
+) -> Result<()> {
+    use crate::lsb;
+    use crate::CombinedPayload;
+
+    // Read the encrypted image file
+    let encrypted_data = fs::read(image_path)
+        .with_context(|| format!("Failed to read image file: {}", image_path.display()))?;
+
+    // Load the image
+    let carrier_img = image::load_from_memory(&encrypted_data)
+        .with_context(|| format!("Failed to load image: {}", image_path.display()))?;
+
+    // Decode embedded payload
+    let payload = lsb::decode(&carrier_img)?
+        .ok_or_else(|| anyhow::anyhow!("No embedded data found in image"))?;
+
+    // Deserialize the combined payload
+    let mut combined_data: CombinedPayload = bincode::deserialize(&payload)
+        .context("Failed to deserialize payload")?;
+
+    // Update the quota for the specified user
+    combined_data.permissions.quotas.insert(user.to_string(), new_quota);
+
+    info!("Updated local permissions for user {} to {} views", user, new_quota);
+
+    // Re-serialize the updated payload
+    let updated_payload = bincode::serialize(&combined_data)
+        .context("Failed to serialize updated payload")?;
+
+    // Re-encode into the carrier image
+    let updated_carrier = lsb::encode(&carrier_img, &updated_payload)
+        .context("Failed to encode updated image")?;
+
+    // Save the updated image back to disk
+    updated_carrier.save(image_path)
+        .with_context(|| format!("Failed to save updated image to {}", image_path.display()))?;
+
+    info!("Successfully saved updated image to {}", image_path.display());
+
+    Ok(())
 }
 
 // =============================================================================

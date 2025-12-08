@@ -122,11 +122,102 @@ enum Commands {
         /// Your username
         #[arg(short, long)]
         username: String,
-        
+
         /// Peer username to query
         #[arg(short, long)]
         peer: String,
-        
+
+        /// Directory service address (optional, will multicast if not specified)
+        #[arg(short, long)]
+        directory: Option<String>,
+    },
+
+    /// Update permissions for a user on your shared image (owner only)
+    UpdatePermissions {
+        /// Your username (must be the owner)
+        #[arg(short, long)]
+        owner: String,
+
+        /// Image ID to update
+        #[arg(short, long)]
+        image_id: String,
+
+        /// Username to update permissions for
+        #[arg(short, long)]
+        username: String,
+
+        /// New quota (0 to revoke access)
+        #[arg(short, long)]
+        new_quota: u32,
+
+        /// Directory service address (optional, will multicast if not specified)
+        #[arg(short, long)]
+        directory: Option<String>,
+    },
+
+    /// Check pending image requests (for owners)
+    CheckRequests {
+        /// Your username
+        #[arg(short, long)]
+        username: String,
+
+        /// Directory service address (optional, will multicast if not specified)
+        #[arg(short, long)]
+        directory: Option<String>,
+    },
+
+    /// Respond to a pending request (accept or reject)
+    RespondRequest {
+        /// Your username (must be the owner)
+        #[arg(short, long)]
+        owner: String,
+
+        /// Request ID to respond to
+        #[arg(short, long)]
+        request_id: String,
+
+        /// Accept the request (use --accept to accept, omit to reject)
+        #[arg(long, default_value_t = false)]
+        accept: bool,
+
+        /// Reject the request (use --reject to reject, omit to accept)
+        #[arg(long, default_value_t = false)]
+        reject: bool,
+
+        /// Directory service address (optional, will multicast if not specified)
+        #[arg(short, long)]
+        directory: Option<String>,
+    },
+
+    /// Check notifications (for requesters)
+    CheckNotifications {
+        /// Your username
+        #[arg(short, long)]
+        username: String,
+
+        /// Directory service address (optional, will multicast if not specified)
+        #[arg(short, long)]
+        directory: Option<String>,
+    },
+
+    /// Remotely update permissions on an image you've already shared
+    RemoteUpdatePermissions {
+        /// Your username (the owner of the image)
+        #[arg(short, long)]
+        owner: String,
+
+        /// The user whose permissions you want to update
+        #[arg(short, long)]
+        target_user: String,
+
+        /// The image ID
+        #[arg(short, long)]
+        image_id: String,
+
+        /// New quota (number of views)
+        #[arg(short, long)]
+        new_quota: u32,
+
         /// Directory service address (optional, will multicast if not specified)
         #[arg(short, long)]
         directory: Option<String>,
@@ -172,6 +263,47 @@ async fn main() -> Result<()> {
             directory,
         } => {
             handle_list_peer_images(username, peer, directory.as_deref()).await?;
+        }
+        Commands::UpdatePermissions {
+            owner,
+            image_id,
+            username,
+            new_quota,
+            directory,
+        } => {
+            handle_update_permissions(owner, image_id, username, *new_quota, directory.as_deref()).await?;
+        }
+        Commands::CheckRequests { username, directory } => {
+            handle_check_requests(username, directory.as_deref()).await?;
+        }
+        Commands::RespondRequest {
+            owner,
+            request_id,
+            accept,
+            reject,
+            directory,
+        } => {
+            // Validate that exactly one of accept/reject is specified
+            if *accept && *reject {
+                bail!("Cannot specify both --accept and --reject");
+            }
+            if !*accept && !*reject {
+                bail!("Must specify either --accept or --reject");
+            }
+
+            handle_respond_request(owner, request_id, *accept, directory.as_deref()).await?;
+        }
+        Commands::CheckNotifications { username, directory } => {
+            handle_check_notifications(username, directory.as_deref()).await?;
+        }
+        Commands::RemoteUpdatePermissions {
+            owner,
+            target_user,
+            image_id,
+            new_quota,
+            directory,
+        } => {
+            handle_remote_update_permissions(owner, target_user, image_id, *new_quota, directory.as_deref()).await?;
         }
     }
 
@@ -308,13 +440,14 @@ fn handle_encrypt(input_path: &PathBuf, owner: &String) -> Result<()> {
     println!("Loaded {} servers from '{}'", servers.len(), SERVER_CONFIG_FILE);
 
     let img_buf = fs::read(input_path)?;
-    println!("Read '{}' ({} bytes = {:.2} MB)", 
-             input_path.display(), 
+    println!("Read '{}' ({} bytes = {:.2} MB)",
+             input_path.display(),
              img_buf.len(),
              img_buf.len() as f64 / 1_048_576.0);
 
-    let mut quotas = HashMap::new();
-    quotas.insert(owner.clone(), 3);
+    // Create empty quotas - owner doesn't need a quota (unlimited access)
+    // Other users can be granted access via P2P requests
+    let quotas = HashMap::new();
 
     let permissions = ImagePermissions {
         owner: owner.clone(),
@@ -497,19 +630,29 @@ fn handle_view(input_path: &PathBuf, current_user: &String) -> Result<()> {
 
     println!("Decoded metadata before view: {:#?}", permissions);
 
-    let has_access = match permissions.quotas.get_mut(current_user) {
-        Some(views_left) if *views_left > 0 => {
-            println!("✓ Access granted. You have {} views left.", *views_left);
-            *views_left -= 1;
-            true
-        }
-        Some(_) => {
-            println!("✗ Access denied. No remaining views!");
-            false
-        }
-        None => {
-            println!("✗ Access denied. You are not authorized to view this image!");
-            false
+    // Check if current user is the owner
+    let is_owner = current_user == &permissions.owner;
+
+    let has_access = if is_owner {
+        // Owner always has unlimited access
+        println!("✓ You are the owner - unlimited access granted!");
+        true
+    } else {
+        // Non-owner users need quota-based access
+        match permissions.quotas.get_mut(current_user) {
+            Some(views_left) if *views_left > 0 => {
+                println!("✓ Access granted. You have {} views left.", *views_left);
+                *views_left -= 1;
+                true
+            }
+            Some(_) => {
+                println!("✗ Access denied. No remaining views!");
+                false
+            }
+            None => {
+                println!("✗ Access denied. You are not authorized to view this image!");
+                false
+            }
         }
     };
 
@@ -517,22 +660,30 @@ fn handle_view(input_path: &PathBuf, current_user: &String) -> Result<()> {
         fs::write(VIEWABLE_OUTPUT_IMAGE, &client_image_bytes)?;
         println!("Saved viewable image to '{}'", VIEWABLE_OUTPUT_IMAGE);
 
-        println!(
-            "Updated views left: {}",
-            permissions.quotas.get(current_user).unwrap_or(&0)
-        );
+        if !is_owner {
+            println!(
+                "Updated views left: {}",
+                permissions.quotas.get(current_user).unwrap_or(&0)
+            );
+        }
 
-        let updated_combined_payload = CombinedPayload {
-            permissions,
-            unified_image: client_image_bytes,
-        };
+        // Only update metadata if non-owner (to save the decremented quota)
+        // Owner doesn't need metadata updates since they have unlimited access
+        if !is_owner {
+            let updated_combined_payload = CombinedPayload {
+                permissions,
+                unified_image: client_image_bytes,
+            };
 
-        let updated_payload = bincode::serialize(&updated_combined_payload)?;
-        let updated_carrier = lsb::encode(&carrier_img, &updated_payload)?;
-       
-        updated_carrier.save(input_path)?;
-       
-        println!("Re-embedded updated metadata back into '{}'", input_path.display());
+            let updated_payload = bincode::serialize(&updated_combined_payload)?;
+            let updated_carrier = lsb::encode(&carrier_img, &updated_payload)?;
+
+            updated_carrier.save(input_path)?;
+
+            println!("Re-embedded updated metadata back into '{}'", input_path.display());
+        } else {
+            println!("Owner access - no quota update needed");
+        }
     } else {
         println!("Access denied - showing default image");
         carrier_img.save(VIEWABLE_OUTPUT_IMAGE)?;
@@ -606,9 +757,10 @@ async fn handle_start_peer(
     }
     
     println!("Found {} images to share", shared_images.len());
-    
+
     // Register with directory service (with multicast support)
-    let p2p_address = format!("0.0.0.0:{}", port);
+    // Use 127.0.0.1 instead of 0.0.0.0 so other peers can connect
+    let p2p_address = format!("127.0.0.1:{}", port);
     let register_msg = DirectoryMessage::Register {
         username: username.to_string(),
         p2p_address: p2p_address.clone(),
@@ -630,7 +782,175 @@ async fn handle_start_peer(
             bail!("Unexpected response from directory service");
         }
     }
-    
+
+    // Check for pending requests (someone tried to contact this user while offline)
+    println!("\n📬 Checking for pending requests...");
+    let check_requests_msg = DirectoryMessage::GetPendingRequests {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, check_requests_msg).await {
+        Ok(DirectoryMessage::GetPendingRequestsResponse { requests }) => {
+            if !requests.is_empty() {
+                println!("🔔 You have {} pending request(s)!", requests.len());
+                for (idx, req) in requests.iter().enumerate() {
+                    println!("\n  {}. From: {}", idx + 1, req.from_user);
+                    println!("     Image: {}", req.image_id);
+                    println!("     Requested views: {}", req.requested_views);
+                }
+                println!("\n💡 Use 'check-requests' command to view details and respond");
+            } else {
+                println!("✓ No pending requests");
+            }
+        }
+        Err(e) => {
+            eprintln!("⚠ Could not check pending requests: {}", e);
+        }
+        _ => {
+            eprintln!("⚠ Unexpected response when checking requests");
+        }
+    }
+
+    // Check for notifications (responses to requests this user made)
+    println!("\n🔔 Checking for notifications...");
+    let check_notifs_msg = DirectoryMessage::GetNotifications {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, check_notifs_msg).await {
+        Ok(DirectoryMessage::GetNotificationsResponse { notifications }) => {
+            if !notifications.is_empty() {
+                println!("🔔 You have {} notification(s)!", notifications.len());
+                for (idx, notif) in notifications.iter().enumerate() {
+                    let status_icon = match notif.status {
+                        cloud_p2p_project::directory_service::RequestStatus::Accepted => "✅",
+                        cloud_p2p_project::directory_service::RequestStatus::Rejected => "❌",
+                        _ => "⏳",
+                    };
+                    println!("\n  {} {}. Request to: {}", status_icon, idx + 1, notif.to_user);
+                    println!("     Image: {}", notif.image_id);
+                    println!("     Requested views: {}", notif.requested_views);
+                    println!("     Status: {:?}", notif.status);
+                    println!();
+                }
+                println!("\n💡 Use 'check-notifications' command to view details");
+            } else {
+                println!("✓ No new notifications");
+            }
+        }
+        Err(e) => {
+            eprintln!("⚠ Could not check notifications: {}", e);
+        }
+        _ => {
+            eprintln!("⚠ Unexpected response when checking notifications");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // NEW: Fetch any pending permission updates stored while this user was offline
+    // Apply them locally so permissions are enforced immediately on login
+    // -----------------------------------------------------------------
+    println!("\n🔁 Checking for pending permission updates...");
+    let pending_updates_msg = DirectoryMessage::GetPendingPermissionUpdates {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, pending_updates_msg).await {
+        Ok(DirectoryMessage::GetPendingPermissionUpdatesResponse { updates }) => {
+            if updates.is_empty() {
+                println!("✓ No pending permission updates");
+            } else {
+                println!("🔔 Applying {} pending permission update(s)...", updates.len());
+
+                for upd in updates {
+                    println!("  • Update from {} for image {} -> {} views",
+                             upd.from_owner, upd.image_id, upd.new_quota);
+
+                    // Try to find the local image path in the image_store
+                    let maybe_path = {
+                        let store = image_store.read().await;
+                        store.get_image_path(&upd.image_id).cloned()
+                    };
+
+                    if let Some(path) = maybe_path {
+                        // Read file, decode, modify quota for this user, re-encode and save atomically
+                        match std::fs::read(&path) {
+                            Ok(buf) => match image::load_from_memory(&buf) {
+                                Ok(img) => {
+                                    match lsb::decode(&img) {
+                                        Ok(Some(payload)) => {
+                                            match bincode::deserialize::<CombinedPayload>(&payload) {
+                                                Ok(mut combined) => {
+                                                    combined.permissions.quotas.insert(username.to_string(), upd.new_quota);
+
+                                                    match bincode::serialize(&combined) {
+                                                        Ok(new_payload) => match lsb::encode(&img, &new_payload) {
+                                                            Ok(updated_carrier) => {
+                                                                // Atomic save: write to temp file then rename
+                                                                // Keep .png extension so image crate recognizes format
+                                                                let tmp = path.with_file_name(format!(
+                                                                    "{}.pending_update_tmp.png",
+                                                                    path.file_stem().unwrap_or_default().to_string_lossy()
+                                                                ));
+                                                                if let Err(e) = updated_carrier.save(&tmp) {
+                                                                    eprintln!("Failed to save temp updated image for {}: {}", path.display(), e);
+                                                                    let _ = std::fs::remove_file(&tmp);
+                                                                    continue;
+                                                                }
+                                                                if let Err(e) = std::fs::rename(&tmp, &path) {
+                                                                    eprintln!("Failed to rename temp updated image into place for {}: {}", path.display(), e);
+                                                                    let _ = std::fs::remove_file(&tmp);
+                                                                    continue;
+                                                                }
+
+                                                                println!("    ✓ Applied update to {} (now {} views)", upd.image_id, upd.new_quota);
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!("Failed to encode updated payload for {}: {}", upd.image_id, e);
+                                                            }
+                                                        },
+                                                        Err(e) => {
+                                                            eprintln!("Failed to serialize updated payload for {}: {}", upd.image_id, e);
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("Failed to deserialize payload for {}: {}", upd.image_id, e);
+                                                }
+                                            }
+                                        }
+                                        Ok(None) => {
+                                            eprintln!("No embedded payload found in {} to apply update", path.display());
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Failed to decode LSB payload in {}: {}", path.display(), e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to load image {}: {}", path.display(), e);
+                                }
+                            },
+                            Err(e) => {
+                                eprintln!("Failed to read local image {}: {}", path.display(), e);
+                            }
+                        }
+                    } else {
+                        println!("    ℹ Local copy of image {} not found; skip applying update", upd.image_id);
+                    }
+                }
+
+                println!("🔔 Pending permission updates applied (if local copies existed)");
+            }
+        }
+        Err(e) => {
+            eprintln!("⚠ Failed to fetch pending permission updates: {}", e);
+        }
+        _ => {
+            eprintln!("⚠ Unexpected response when fetching pending permission updates");
+        }
+    }
+
     // Start heartbeat task
     let heartbeat_username = username.to_string();
     let heartbeat_addr_opt = directory_addr.map(|s| s.to_string());
@@ -720,19 +1040,68 @@ async fn handle_request_image(
     println!("Peer: {}", peer_username);
     println!("Image ID: {}", image_id);
     println!("Requested views: {}", views);
-    
+
+    // First, verify that the requesting user (yourself) is online
+    println!("\nVerifying you are connected to directory service...");
+    let self_query_msg = DirectoryMessage::QueryUser {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, self_query_msg).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(user_entry) }) => {
+            // Check if user is actually ONLINE (not just registered)
+            use cloud_p2p_project::directory_service::UserStatus;
+            if user_entry.status == UserStatus::Online {
+                println!("✓ You are online and connected to directory service");
+            } else {
+                bail!(
+                    "❌ You must be online to request images!\n\
+                    \n\
+                    Your account exists but your P2P peer is offline.\n\
+                    You need to start your P2P peer:\n\
+                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                    \n\
+                    This will mark you as online and allow you to request images.",
+                    username
+                );
+            }
+        }
+        Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+            bail!(
+                "❌ You must be online to request images!\n\
+                \n\
+                You need to start your P2P peer first:\n\
+                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                \n\
+                This will register you with the directory service and allow you to request images.",
+                username
+            );
+        }
+        Err(e) => {
+            bail!("Error connecting to directory service: {}\n\nMake sure the directory service is running.", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    }
+
     // Query directory service for peer address
+    println!("\nLooking up peer '{}'...", peer_username);
     let query_msg = DirectoryMessage::QueryUser {
         username: peer_username.to_string(),
     };
     
-    let peer_addr = match send_directory_or_multicast(directory_addr, query_msg).await {
+    match send_directory_or_multicast(directory_addr, query_msg).await {
         Ok(DirectoryMessage::QueryUserResponse { user: Some(user) }) => {
-            println!("✓ Found peer at: {}", user.p2p_address);
-            user.p2p_address
+            use cloud_p2p_project::directory_service::UserStatus;
+            if user.status == UserStatus::Online {
+                println!("✓ Owner '{}' is online", peer_username);
+            } else {
+                println!("ℹ Owner '{}' is currently offline", peer_username);
+            }
         }
         Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
-            bail!("Peer '{}' not found or offline", peer_username);
+            println!("ℹ Owner '{}' is not registered yet", peer_username);
         }
         Err(e) => {
             bail!("Error querying directory service: {}", e);
@@ -741,18 +1110,41 @@ async fn handle_request_image(
             bail!("Unexpected response from directory service");
         }
     };
-    
-    // Request image from peer
-    println!("Requesting image from peer...");
-    match request_image_from_peer(&peer_addr, username, image_id, views).await {
-        Ok(encrypted_image) => {
-            fs::write(output, &encrypted_image)?;
-            println!("✓ Image received and saved to '{}'", output.display());
-            println!("You now have {} views for this image", views);
+
+    // Always leave a request for the owner to approve (whether online or offline)
+    println!("\n📝 Submitting request to owner for approval...");
+    let leave_request_msg = DirectoryMessage::LeaveRequest {
+        from_user: username.to_string(),
+        to_user: peer_username.to_string(),
+        image_id: image_id.to_string(),
+        requested_views: views,
+    };
+
+    match send_directory_or_multicast(directory_addr, leave_request_msg).await {
+        Ok(DirectoryMessage::LeaveRequestResponse { success: true, request_id, message }) => {
+            println!("✓ Request submitted successfully!");
+            println!("\n📋 Request details:");
+            println!("   Request ID: {}", request_id);
+            println!("   To: {}", peer_username);
+            println!("   Image: {}", image_id);
+            println!("   Requested views: {}", views);
+            println!("\n⏳ Waiting for owner approval...");
+            println!("   The owner must accept your request before you can view the image.");
+            println!("   If the owner is online, they will see your request immediately.");
+            println!("   If offline, they will see it when they come online.");
+            println!("\n💡 Check for owner's response with:");
+            println!("   cargo run --bin client -- check-notifications --username {}", username);
+            println!("\n   Once accepted, the image will be automatically delivered to you!");
             Ok(())
         }
+        Ok(DirectoryMessage::LeaveRequestResponse { success: false, message, .. }) => {
+            bail!("Failed to leave request: {}", message);
+        }
         Err(e) => {
-            bail!("Failed to get image from peer: {}", e);
+            bail!("Error leaving request: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
         }
     }
 }
@@ -765,8 +1157,49 @@ async fn handle_list_peer_images(
     println!("=== Listing Peer's Images ===");
     println!("Your username: {}", username);
     println!("Peer: {}", peer_username);
-    
+
+    // First, verify that the requesting user (yourself) is online
+    println!("\nVerifying you are connected to directory service...");
+    let self_query_msg = DirectoryMessage::QueryUser {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, self_query_msg).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(user_entry) }) => {
+            // Check if user is actually ONLINE (not just registered)
+            use cloud_p2p_project::directory_service::UserStatus;
+            if user_entry.status == UserStatus::Online {
+                println!("✓ You are online and connected to directory service");
+            } else {
+                bail!(
+                    "❌ You must be online to list peer images!\n\
+                    \n\
+                    Your account exists but your P2P peer is offline.\n\
+                    You need to start your P2P peer:\n\
+                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                    username
+                );
+            }
+        }
+        Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+            bail!(
+                "❌ You must be online to list peer images!\n\
+                \n\
+                You need to start your P2P peer first:\n\
+                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                username
+            );
+        }
+        Err(e) => {
+            bail!("Error connecting to directory service: {}\n\nMake sure the directory service is running.", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    }
+
     // Query directory service for peer address
+    println!("\nLooking up peer '{}'...", peer_username);
     let query_msg = DirectoryMessage::QueryUser {
         username: peer_username.to_string(),
     };
@@ -812,6 +1245,620 @@ async fn handle_list_peer_images(
         }
         Err(e) => {
             bail!("Failed to list images from peer: {}", e);
+        }
+    }
+}
+
+async fn handle_update_permissions(
+    owner: &str,
+    image_id: &str,
+    username: &str,
+    new_quota: u32,
+    directory_addr: Option<&str>,
+) -> Result<()> {
+    println!("=== Updating Permissions ===");
+    println!("Owner: {}", owner);
+    println!("Image ID: {}", image_id);
+    println!("User: {}", username);
+    println!("New quota: {} views", new_quota);
+
+    if new_quota == 0 {
+        println!("⚠ This will REVOKE access for user '{}'", username);
+    }
+
+    // The owner needs to connect to their OWN P2P server to update the image
+    // Query directory service for own address
+    let query_msg = DirectoryMessage::QueryUser {
+        username: owner.to_string(),
+    };
+
+    let own_addr = match send_directory_or_multicast(directory_addr, query_msg).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(user) }) => {
+            println!("✓ Found own P2P server at: {}", user.p2p_address);
+            user.p2p_address
+        }
+        Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+            bail!("You must be running your P2P server to update permissions.\nStart with: cargo run --bin client -- start-peer --username {} --port <port> --images-dir <dir>", owner);
+        }
+        Err(e) => {
+            bail!("Error querying directory service: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    };
+
+    // Send update permissions request to own P2P server
+    use cloud_p2p_project::p2p_protocol::{P2PMessage, send_p2p_message};
+
+    let update_msg = P2PMessage::UpdatePermissions {
+        owner: owner.to_string(),
+        image_id: image_id.to_string(),
+        username: username.to_string(),
+        new_quota,
+    };
+
+    println!("Sending permission update request...");
+    match send_p2p_message(&own_addr, update_msg).await {
+        Ok(P2PMessage::UpdatePermissionsResponse { success: true, message }) => {
+            println!("✓ {}", message);
+            if new_quota == 0 {
+                println!("✓ User '{}' can no longer view this image", username);
+            } else {
+                println!("✓ User '{}' now has {} views", username, new_quota);
+            }
+            Ok(())
+        }
+        Ok(P2PMessage::UpdatePermissionsResponse { success: false, message }) => {
+            bail!("Failed to update permissions: {}", message);
+        }
+        Err(e) => {
+            bail!("Failed to communicate with P2P server: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from P2P server");
+        }
+    }
+}
+
+async fn handle_check_requests(
+    username: &str,
+    directory_addr: Option<&str>,
+) -> Result<()> {
+    println!("=== Checking Pending Requests ===");
+    println!("Username: {}", username);
+
+    // Verify the user is online first
+    println!("\n🔍 Verifying you are online...");
+    let self_query = DirectoryMessage::QueryUser {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, self_query).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(user_entry) }) => {
+            use cloud_p2p_project::directory_service::UserStatus;
+            if user_entry.status != UserStatus::Online {
+                bail!(
+                    "❌ You must be online to check requests!\n\
+                    \n\
+                    Start your P2P server first:\n\
+                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                    \n\
+                    Your pending requests will be shown automatically when you come online.",
+                    username
+                );
+            }
+            println!("✓ You are online\n");
+        }
+        Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+            bail!(
+                "❌ You must be online to check requests!\n\
+                \n\
+                Start your P2P server first:\n\
+                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                username
+            );
+        }
+        Err(e) => {
+            bail!("Error checking online status: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    }
+
+    let msg = DirectoryMessage::GetPendingRequests {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, msg).await {
+        Ok(DirectoryMessage::GetPendingRequestsResponse { requests }) => {
+            if requests.is_empty() {
+                println!("✓ No pending requests");
+            } else {
+                println!("\n📬 You have {} pending request(s):\n", requests.len());
+
+                for (idx, req) in requests.iter().enumerate() {
+                    println!("{}. Request ID: {}", idx + 1, req.request_id);
+                    println!("   From: {}", req.from_user);
+                    println!("   Image: {}", req.image_id);
+                    println!("   Requested views: {}", req.requested_views);
+
+                    if let Ok(duration) = req.timestamp.elapsed() {
+                        let secs = duration.as_secs();
+                        if secs < 60 {
+                            println!("   Time: {} seconds ago", secs);
+                        } else if secs < 3600 {
+                            println!("   Time: {} minutes ago", secs / 60);
+                        } else {
+                            println!("   Time: {} hours ago", secs / 3600);
+                        }
+                    }
+
+                    println!();
+                }
+
+                println!("To respond to a request, use:");
+                println!("  cargo run --bin client -- respond-request --owner {} --request-id <ID> --accept <true/false>", username);
+            }
+
+            Ok(())
+        }
+        Err(e) => {
+            bail!("Error checking requests: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    }
+}
+
+async fn handle_respond_request(
+    owner: &str,
+    request_id: &str,
+    accept: bool,
+    directory_addr: Option<&str>,
+) -> Result<()> {
+    println!("=== Responding to Request ===");
+    println!("Request ID: {}", request_id);
+    println!("Action: {}", if accept { "ACCEPT" } else { "REJECT" });
+
+    // If accepting, verify the owner is online first
+    if accept {
+        println!("\n🔍 Verifying you are online...");
+        let self_query = DirectoryMessage::QueryUser {
+            username: owner.to_string(),
+        };
+
+        match send_directory_or_multicast(directory_addr, self_query).await {
+            Ok(DirectoryMessage::QueryUserResponse { user: Some(user_entry) }) => {
+                use cloud_p2p_project::directory_service::UserStatus;
+                if user_entry.status != UserStatus::Online {
+                    bail!(
+                        "❌ You must be online to accept requests!\n\
+                        \n\
+                        To accept this request, you need to start your P2P server:\n\
+                          cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>\n\
+                        \n\
+                        Then run the respond-request command again.",
+                        owner
+                    );
+                }
+                println!("✓ You are online");
+            }
+            Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+                bail!(
+                    "❌ You must be online to accept requests!\n\
+                    \n\
+                    Start your P2P server first:\n\
+                    cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                    owner
+                );
+            }
+            Err(e) => {
+                bail!("Error checking online status: {}", e);
+            }
+            _ => {
+                bail!("Unexpected response from directory service");
+            }
+        }
+    }
+
+    let msg = DirectoryMessage::RespondToRequest {
+        request_id: request_id.to_string(),
+        owner: owner.to_string(),
+        accept,
+    };
+
+    match send_directory_or_multicast(directory_addr, msg).await {
+        Ok(DirectoryMessage::RespondToRequestResponse { success: true, message, request: Some(req) }) => {
+            println!("✓ {}", message);
+
+            if accept {
+                // Automatically grant permissions by updating the image
+                println!("\n🔄 Automatically granting permissions...");
+                println!("   User: {}", req.from_user);
+                println!("   Image: {}", req.image_id);
+                println!("   Views: {}", req.requested_views);
+
+                // Call update_permissions automatically
+                match handle_update_permissions(
+                    owner,
+                    &req.image_id,
+                    &req.from_user,
+                    req.requested_views,
+                    directory_addr,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        println!("\n✅ Permissions granted successfully!");
+
+                        // Now check if requester is online and deliver the image automatically
+                        println!("\n📤 Checking if {} is online to deliver the image...", req.from_user);
+
+                        let query_msg = DirectoryMessage::QueryUser {
+                            username: req.from_user.clone(),
+                        };
+
+                        match send_directory_or_multicast(directory_addr, query_msg).await {
+                            Ok(DirectoryMessage::QueryUserResponse { user: Some(user) }) => {
+                                use cloud_p2p_project::directory_service::UserStatus;
+                                if user.status == UserStatus::Online {
+                                    println!("✓ {} is online at {}", req.from_user, user.p2p_address);
+                                    println!("🚀 Fetching image to deliver to {}...", req.from_user);
+
+                                    // First, fetch the image from our own P2P server (with updated permissions)
+                                    use cloud_p2p_project::p2p_protocol::{P2PMessage, send_p2p_message, request_image_from_peer};
+
+                                    // Query directory to get our own P2P address
+                                    let self_query = DirectoryMessage::QueryUser {
+                                        username: owner.to_string(),
+                                    };
+
+                                    match send_directory_or_multicast(directory_addr, self_query).await {
+                                        Ok(DirectoryMessage::QueryUserResponse { user: Some(self_user) }) => {
+                                            // Fetch the image from our own P2P server AS THE OWNER
+                                            // (so quota doesn't get decremented)
+                                            match request_image_from_peer(
+                                                &self_user.p2p_address,
+                                                owner,  // Request as owner, not as the requester
+                                                &req.image_id,
+                                                req.requested_views,
+                                            )
+                                            .await
+                                            {
+                                                Ok(encrypted_image) => {
+                                                    println!("✓ Image fetched, now delivering to {}...", req.from_user);
+
+                                                    // Now deliver the image to the requester
+                                                    let deliver_msg = P2PMessage::DeliverImage {
+                                                        from_owner: owner.to_string(),
+                                                        image_id: req.image_id.clone(),
+                                                        requested_views: req.requested_views,
+                                                        encrypted_image,
+                                                    };
+
+                                                    match send_p2p_message(&user.p2p_address, deliver_msg).await {
+                                                        Ok(P2PMessage::DeliverImageResponse { success: true, message }) => {
+                                                            println!("\n✅ Image delivered successfully to {}!", req.from_user);
+                                                            println!("   {}", message);
+                                                        }
+                                                        Ok(P2PMessage::DeliverImageResponse { success: false, message }) => {
+                                                            eprintln!("\n⚠ Failed to deliver image: {}", message);
+                                                            println!("💡 {} can manually request the image when ready", req.from_user);
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!("\n⚠ Could not deliver image to {}: {}", req.from_user, e);
+                                                            println!("💡 {} can manually request the image when ready", req.from_user);
+                                                        }
+                                                        _ => {
+                                                            eprintln!("\n⚠ Unexpected response when delivering image");
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("\n⚠ Failed to fetch image for delivery: {}", e);
+                                                    println!("💡 {} can manually request the image when ready", req.from_user);
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            eprintln!("\n⚠ Could not find own P2P server");
+                                            println!("💡 {} can manually request the image when ready", req.from_user);
+                                        }
+                                    }
+                                } else {
+                                    println!("ℹ {} is offline. They will receive the image when they come online.", req.from_user);
+                                    println!("💡 {} can request the image with:", req.from_user);
+                                    println!("   cargo run --bin client -- request-image --username {} --peer {} --image-id {} --views {} --output <PATH>",
+                                             req.from_user, owner, req.image_id, req.requested_views);
+                                }
+                            }
+                            Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+                                println!("ℹ {} is not online. They can request the image when they come online.", req.from_user);
+                            }
+                            Err(e) => {
+                                eprintln!("⚠ Could not check if {} is online: {}", req.from_user, e);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("\n⚠ Warning: Request was accepted but failed to grant permissions:");
+                        eprintln!("   {}", e);
+                        eprintln!("\n💡 You can manually grant permissions with:");
+                        eprintln!("   cargo run --bin client -- update-permissions --owner {} --image-id {} --username {} --new-quota {}",
+                                 owner, req.image_id, req.from_user, req.requested_views);
+                    }
+                }
+            } else {
+                println!("\n✅ Request rejected successfully.");
+            }
+
+            Ok(())
+        }
+        Ok(DirectoryMessage::RespondToRequestResponse { success: true, message, request: None }) => {
+            println!("✓ {}", message);
+            eprintln!("⚠ Warning: No request details returned");
+            Ok(())
+        }
+        Ok(DirectoryMessage::RespondToRequestResponse { success: false, message, .. }) => {
+            bail!("Failed to respond: {}", message);
+        }
+        Err(e) => {
+            bail!("Error responding to request: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    }
+}
+
+async fn handle_check_notifications(
+    username: &str,
+    directory_addr: Option<&str>,
+) -> Result<()> {
+    println!("=== Checking Notifications ===");
+    println!("Username: {}", username);
+
+    let msg = DirectoryMessage::GetNotifications {
+        username: username.to_string(),
+    };
+
+    match send_directory_or_multicast(directory_addr, msg).await {
+        Ok(DirectoryMessage::GetNotificationsResponse { notifications }) => {
+            if notifications.is_empty() {
+                println!("✓ No new notifications");
+            } else {
+                println!("\n🔔 You have {} notification(s):\n", notifications.len());
+
+                for (idx, notif) in notifications.iter().enumerate() {
+                    let status_icon = match notif.status {
+                        cloud_p2p_project::directory_service::RequestStatus::Accepted => "✅",
+                        cloud_p2p_project::directory_service::RequestStatus::Rejected => "❌",
+                        _ => "⏳",
+                    };
+
+                    println!("{} {}. Request to: {}", status_icon, idx + 1, notif.to_user);
+                    println!("   Image: {}", notif.image_id);
+                    println!("   Requested views: {}", notif.requested_views);
+                    println!("   Status: {:?}", notif.status);
+
+                    if let Ok(duration) = notif.timestamp.elapsed() {
+                        let secs = duration.as_secs();
+                        if secs < 60 {
+                            println!("   Time: {} seconds ago", secs);
+                        } else if secs < 3600 {
+                            println!("   Time: {} minutes ago", secs / 60);
+                        } else {
+                            println!("   Time: {} hours ago", secs / 3600);
+                        }
+                    }
+
+                    if notif.status == cloud_p2p_project::directory_service::RequestStatus::Accepted {
+                        println!("\n   💡 Your request was accepted! You can now request the image:");
+                        println!("   cargo run --bin client -- request-image --username {} --peer {} --image-id {} --views {}",
+                                 username, notif.to_user, notif.image_id, notif.requested_views);
+                    }
+
+                    println!();
+                }
+            }
+
+            Ok(())
+        }
+        Err(e) => {
+            bail!("Error checking notifications: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    }
+}
+
+async fn handle_remote_update_permissions(
+    owner: &str,
+    target_user: &str,
+    image_id: &str,
+    new_quota: u32,
+    directory_addr: Option<&str>,
+) -> Result<()> {
+    println!("=== Remote Permission Update ===");
+    println!("Owner: {}", owner);
+    println!("Target user: {}", target_user);
+    println!("Image ID: {}", image_id);
+    println!("New quota: {} views", new_quota);
+
+    // First, verify the owner is online and P2P server is actually running
+    println!("\n🔍 Verifying you are online...");
+    let self_query = DirectoryMessage::QueryUser {
+        username: owner.to_string(),
+    };
+
+    let owner_p2p_addr = match send_directory_or_multicast(directory_addr, self_query).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(user_entry) }) => {
+            use cloud_p2p_project::directory_service::UserStatus;
+            if user_entry.status != UserStatus::Online {
+                bail!(
+                    "❌ You must be online to send remote permission updates!\n\
+                    \n\
+                    Start your P2P server first:\n\
+                      cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                    owner
+                );
+            }
+            user_entry.p2p_address
+        }
+        Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+            bail!("❌ User '{}' not found in directory", owner);
+        }
+        Err(e) => {
+            bail!("Failed to verify online status: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    };
+
+    // Actually verify the P2P server is reachable by sending a list images request
+    use cloud_p2p_project::p2p_protocol::{list_peer_images};
+    use tokio::time::{timeout, Duration};
+
+    match timeout(Duration::from_secs(2), list_peer_images(&owner_p2p_addr, owner)).await {
+        Ok(Ok(_)) => {
+            println!("✓ Your P2P server is running\n");
+        }
+        Ok(Err(e)) => {
+            bail!(
+                "❌ Your P2P server is not reachable at {}!\n\
+                \n\
+                Error: {}\n\
+                \n\
+                Start your P2P server first:\n\
+                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                owner_p2p_addr, e, owner
+            );
+        }
+        Err(_) => {
+            bail!(
+                "❌ Connection timeout: Your P2P server is not responding at {}!\n\
+                \n\
+                Start your P2P server first:\n\
+                  cargo run --bin client -- start-peer --username {} --port <PORT> --images-dir <DIR>",
+                owner_p2p_addr, owner
+            );
+        }
+    }
+
+    // Query the directory service for the target user
+    println!("🔍 Looking up target user '{}'...", target_user);
+    let query_msg = DirectoryMessage::QueryUser {
+        username: target_user.to_string(),
+    };
+
+    let target_user_info = match send_directory_or_multicast(directory_addr, query_msg).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(user) }) => user,
+        Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+            bail!("❌ User '{}' not found in directory", target_user);
+        }
+        Err(e) => {
+            bail!("Failed to query directory: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from directory service");
+        }
+    };
+
+    use cloud_p2p_project::directory_service::UserStatus;
+
+    // Check if user is offline or unreachable - if so, queue the update
+    let is_offline = target_user_info.status == UserStatus::Offline;
+    let is_unreachable = if !is_offline {
+        // Try to verify P2P server is actually reachable
+        match timeout(Duration::from_secs(2), list_peer_images(&target_user_info.p2p_address, target_user)).await {
+            Ok(Ok(_)) => false,
+            _ => true,
+        }
+    } else {
+        true
+    };
+
+    if is_offline || is_unreachable {
+        // User is offline or unreachable - store pending update
+        println!("⚠  Target user '{}' is currently offline or unreachable.", target_user);
+        println!("📝 Queuing permission update for when they come online...");
+
+        let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
+            from_owner: owner.to_string(),
+            target_user: target_user.to_string(),
+            image_id: image_id.to_string(),
+            new_quota,
+        };
+
+        match send_directory_or_multicast(directory_addr, pending_msg).await {
+            Ok(DirectoryMessage::StorePendingPermissionUpdateResponse { success: true, message, .. }) => {
+                println!("\n✅ Permission update queued successfully!");
+                println!("   {}", message);
+                println!("\n   When '{}' comes online:", target_user);
+                println!("   • They will be notified of the permission change");
+                println!("   • Their local image will be automatically updated");
+                if new_quota == 0 {
+                    println!("   • Their access will be revoked (0 views)");
+                } else {
+                    println!("   • Their quota will be set to {} views", new_quota);
+                }
+                return Ok(());
+            }
+            Ok(DirectoryMessage::StorePendingPermissionUpdateResponse { success: false, message, .. }) => {
+                bail!("Failed to queue permission update: {}", message);
+            }
+            Err(e) => {
+                bail!("Failed to communicate with directory service: {}", e);
+            }
+            _ => {
+                bail!("Unexpected response from directory service");
+            }
+        }
+    }
+
+    // User is online and reachable
+    println!("✓ Target user '{}' is online at {}", target_user, target_user_info.p2p_address);
+
+    // Send the remote update request to the target user's P2P server
+    println!("\n📤 Sending permission update request to {}...", target_user);
+
+    use cloud_p2p_project::p2p_protocol::{P2PMessage, send_p2p_message};
+
+    let update_msg = P2PMessage::RemoteUpdatePermissions {
+        from_owner: owner.to_string(),
+        image_id: image_id.to_string(),
+        for_user: target_user.to_string(),
+        new_quota,
+    };
+
+    // NOTE: use the p2p address from the fetched target_user_info (was using undefined `target_p2p_addr`)
+    match send_p2p_message(&target_user_info.p2p_address, update_msg).await {
+        Ok(P2PMessage::RemoteUpdatePermissionsResponse { success: true, message }) => {
+            println!("\n✅ Permission update successful!");
+            println!("   {}", message);
+
+            if new_quota == 0 {
+                println!("\n⚠  User '{}' can no longer view this image.", target_user);
+            } else {
+                println!("\n✓ User '{}' now has {} views for image '{}'", target_user, new_quota, image_id);
+            }
+
+            Ok(())
+        }
+        Ok(P2PMessage::RemoteUpdatePermissionsResponse { success: false, message }) => {
+            bail!("❌ Permission update failed: {}", message);
+        }
+        Err(e) => {
+            bail!("Failed to send update request: {}", e);
+        }
+        _ => {
+            bail!("Unexpected response from target user");
         }
     }
 }

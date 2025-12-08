@@ -39,6 +39,36 @@ pub struct ImageInfo {
     pub thumbnail_path: Option<String>,
 }
 
+/// Pending image request notification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingRequest {
+    pub request_id: String,
+    pub from_user: String,
+    pub to_user: String,
+    pub image_id: String,
+    pub requested_views: u32,
+    pub timestamp: SystemTime,
+    pub status: RequestStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RequestStatus {
+    Pending,
+    Accepted,
+    Rejected,
+}
+
+/// Pending permission update (for offline users)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPermissionUpdate {
+    pub update_id: String,
+    pub from_owner: String,
+    pub target_user: String,
+    pub image_id: String,
+    pub new_quota: u32,
+    pub timestamp: SystemTime,
+}
+
 /// Directory service messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DirectoryMessage {
@@ -89,6 +119,60 @@ pub enum DirectoryMessage {
     SyncStateResponse {
         success: bool,
     },
+
+    // Asynchronous request system
+    LeaveRequest {
+        from_user: String,
+        to_user: String,
+        image_id: String,
+        requested_views: u32,
+    },
+    LeaveRequestResponse {
+        success: bool,
+        request_id: String,
+        message: String,
+    },
+    GetPendingRequests {
+        username: String,
+    },
+    GetPendingRequestsResponse {
+        requests: Vec<PendingRequest>,
+    },
+    RespondToRequest {
+        request_id: String,
+        owner: String,
+        accept: bool,
+    },
+    RespondToRequestResponse {
+        success: bool,
+        message: String,
+        request: Option<PendingRequest>,
+    },
+    GetNotifications {
+        username: String,
+    },
+    GetNotificationsResponse {
+        notifications: Vec<PendingRequest>,
+    },
+    /// Store a pending permission update for an offline user
+    StorePendingPermissionUpdate {
+        from_owner: String,
+        target_user: String,
+        image_id: String,
+        new_quota: u32,
+    },
+    StorePendingPermissionUpdateResponse {
+        success: bool,
+        message: String,
+        update_id: String,
+    },
+    /// Get pending permission updates for a user
+    GetPendingPermissionUpdates {
+        username: String,
+    },
+    GetPendingPermissionUpdatesResponse {
+        updates: Vec<PendingPermissionUpdate>,
+    },
 }
 
 // =============================================================================
@@ -100,9 +184,23 @@ pub struct DirectoryServiceState {
     heartbeat_timeout: Duration,
     peer_servers: Vec<String>,
     server_id: String,
-    
+
     /// NEW: Path to persistent state file
     state_file: PathBuf,
+
+    /// NEW: Pending requests storage
+    pending_requests: RwLock<HashMap<String, PendingRequest>>,
+
+    /// NEW: Pending permission updates storage
+    pending_permission_updates: RwLock<HashMap<String, PendingPermissionUpdate>>,
+}
+
+/// Snapshot of directory service state for persistence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DirectorySnapshot {
+    users: HashMap<String, UserEntry>,
+    pending_requests: HashMap<String, PendingRequest>,
+    pending_permission_updates: HashMap<String, PendingPermissionUpdate>,
 }
 
 impl DirectoryServiceState {
@@ -118,6 +216,8 @@ impl DirectoryServiceState {
             peer_servers,
             server_id,
             state_file,
+            pending_requests: RwLock::new(HashMap::new()),
+            pending_permission_updates: RwLock::new(HashMap::new()),
         }
     }
     
@@ -129,16 +229,38 @@ impl DirectoryServiceState {
         }
         
         let data = fs::read_to_string(&self.state_file)?;
-        let loaded_users: HashMap<String, UserEntry> = serde_json::from_str(&data)?;
         
-        let mut users = self.users.write().await;
-        *users = loaded_users;
-        
-        info!("[{}] ✓ Loaded {} users from disk", self.server_id, users.len());
-        
-        // Mark all users as offline initially (will come back online with heartbeat)
-        for user in users.values_mut() {
-            user.status = UserStatus::Offline;
+        // Try to load the new snapshot format first
+        if let Ok(snapshot) = serde_json::from_str::<DirectorySnapshot>(&data) {
+            let mut users = self.users.write().await;
+            *users = snapshot.users;
+            
+            // Mark all users as offline initially (will come back online with heartbeat)
+            for user in users.values_mut() {
+                user.status = UserStatus::Offline;
+            }
+            
+            let mut pending_requests = self.pending_requests.write().await;
+            *pending_requests = snapshot.pending_requests;
+            
+            let mut pending_updates = self.pending_permission_updates.write().await;
+            *pending_updates = snapshot.pending_permission_updates;
+            
+            info!("[{}] ✓ Loaded snapshot from disk ({} users, {} pending requests, {} pending permission updates)", 
+                  self.server_id, users.len(), pending_requests.len(), pending_updates.len());
+        } else {
+            // Fall back to old format (just users)
+            let loaded_users: HashMap<String, UserEntry> = serde_json::from_str(&data)?;
+            
+            let mut users = self.users.write().await;
+            *users = loaded_users;
+            
+            info!("[{}] ✓ Loaded {} users from disk (legacy format)", self.server_id, users.len());
+            
+            // Mark all users as offline initially (will come back online with heartbeat)
+            for user in users.values_mut() {
+                user.status = UserStatus::Offline;
+            }
         }
         
         Ok(())
@@ -147,10 +269,20 @@ impl DirectoryServiceState {
     /// NEW: Save state to disk
     async fn save_to_disk(&self) -> Result<()> {
         let users = self.users.read().await;
-        let data = serde_json::to_string_pretty(&*users)?;
+        let pending_requests = self.pending_requests.read().await;
+        let pending_updates = self.pending_permission_updates.read().await;
+        
+        let snapshot = DirectorySnapshot {
+            users: users.clone(),
+            pending_requests: pending_requests.clone(),
+            pending_permission_updates: pending_updates.clone(),
+        };
+        
+        let data = serde_json::to_string_pretty(&snapshot)?;
         fs::write(&self.state_file, data)?;
         
-        info!("[{}] ✓ Saved state to disk ({} users)", self.server_id, users.len());
+        info!("[{}] ✓ Saved snapshot to disk ({} users, {} pending requests, {} pending permission updates)", 
+              self.server_id, users.len(), pending_requests.len(), pending_updates.len());
         Ok(())
     }
     
@@ -390,6 +522,152 @@ impl DirectoryServiceState {
         let users = self.users.read().await;
         users.clone()
     }
+
+    // =============================================================================
+    // ASYNCHRONOUS REQUEST SYSTEM
+    // =============================================================================
+
+    /// Leave a request when target user is offline
+    pub async fn leave_request(
+        &self,
+        from_user: String,
+        to_user: String,
+        image_id: String,
+        requested_views: u32,
+    ) -> Result<String> {
+        use uuid::Uuid;
+
+        let request_id = Uuid::new_v4().to_string();
+        let request = PendingRequest {
+            request_id: request_id.clone(),
+            from_user,
+            to_user,
+            image_id,
+            requested_views,
+            timestamp: SystemTime::now(),
+            status: RequestStatus::Pending,
+        };
+
+        let mut requests = self.pending_requests.write().await;
+        requests.insert(request_id.clone(), request);
+
+        info!("[{}] New request saved: {}", self.server_id, request_id);
+        Ok(request_id)
+    }
+
+    /// Get pending requests for a user (requests TO them)
+    pub async fn get_pending_requests_for_user(&self, username: &str) -> Vec<PendingRequest> {
+        let requests = self.pending_requests.read().await;
+        requests
+            .values()
+            .filter(|r| r.to_user == username && r.status == RequestStatus::Pending)
+            .cloned()
+            .collect()
+    }
+
+    /// Respond to a request (accept or reject)
+    pub async fn respond_to_request(
+        &self,
+        request_id: &str,
+        owner: &str,
+        accept: bool,
+    ) -> Result<(String, PendingRequest)> {
+        let mut requests = self.pending_requests.write().await;
+
+        match requests.get_mut(request_id) {
+            Some(request) => {
+                // Verify the responder is the request recipient
+                if request.to_user != owner {
+                    bail!("Only the recipient can respond to this request");
+                }
+
+                // Update status
+                request.status = if accept {
+                    RequestStatus::Accepted
+                } else {
+                    RequestStatus::Rejected
+                };
+
+                let message = if accept {
+                    format!("Request accepted. User {} can now access the image.", request.from_user)
+                } else {
+                    format!("Request rejected.")
+                };
+
+                info!(
+                    "[{}] Request {} {} by {}",
+                    self.server_id,
+                    request_id,
+                    if accept { "accepted" } else { "rejected" },
+                    owner
+                );
+
+                // Return a clone of the updated request
+                let request_copy = request.clone();
+                Ok((message, request_copy))
+            }
+            None => bail!("Request not found"),
+        }
+    }
+
+    /// Get notifications for a user (responses to their requests)
+    pub async fn get_notifications_for_user(&self, username: &str) -> Vec<PendingRequest> {
+        let requests = self.pending_requests.read().await;
+        requests
+            .values()
+            .filter(|r| {
+                r.from_user == username
+                    && (r.status == RequestStatus::Accepted || r.status == RequestStatus::Rejected)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Store a pending permission update for an offline user
+    pub async fn store_pending_permission_update(
+        &self,
+        from_owner: &str,
+        target_user: &str,
+        image_id: &str,
+        new_quota: u32,
+    ) -> String {
+        let update_id = format!("{}:{}:{}", from_owner, target_user, image_id);
+        let update = PendingPermissionUpdate {
+            update_id: update_id.clone(),
+            from_owner: from_owner.to_string(),
+            target_user: target_user.to_string(),
+            image_id: image_id.to_string(),
+            new_quota,
+            timestamp: SystemTime::now(),
+        };
+
+        let mut updates = self.pending_permission_updates.write().await;
+        updates.insert(update_id.clone(), update);
+
+        info!(
+            "[{}] Stored pending permission update: {} wants to change {}'s quota for {} to {} views",
+            self.server_id, from_owner, target_user, image_id, new_quota
+        );
+
+        update_id
+    }
+
+    /// Get and remove pending permission updates for a user
+    pub async fn get_and_clear_pending_updates(&self, username: &str) -> Vec<PendingPermissionUpdate> {
+        let mut updates = self.pending_permission_updates.write().await;
+        let user_updates: Vec<PendingPermissionUpdate> = updates
+            .values()
+            .filter(|u| u.target_user == username)
+            .cloned()
+            .collect();
+
+        // Remove the retrieved updates
+        for update in &user_updates {
+            updates.remove(&update.update_id);
+        }
+
+        user_updates
+    }
 }
 
 // =============================================================================
@@ -531,6 +809,94 @@ async fn handle_directory_client(
             state.receive_state_sync(users).await;
             DirectoryMessage::SyncStateResponse { success: true }
         }
+
+        // Asynchronous request handling
+        DirectoryMessage::LeaveRequest {
+            from_user,
+            to_user,
+            image_id,
+            requested_views,
+        } => {
+            match state.leave_request(from_user, to_user, image_id, requested_views).await {
+                Ok(request_id) => DirectoryMessage::LeaveRequestResponse {
+                    success: true,
+                    request_id,
+                    message: "Request saved. User will be notified when online.".to_string(),
+                },
+                Err(e) => DirectoryMessage::LeaveRequestResponse {
+                    success: false,
+                    request_id: String::new(),
+                    message: format!("Failed to save request: {}", e),
+                },
+            }
+        }
+
+        DirectoryMessage::GetPendingRequests { username } => {
+            let requests = state.get_pending_requests_for_user(&username).await;
+            DirectoryMessage::GetPendingRequestsResponse { requests }
+        }
+
+        DirectoryMessage::RespondToRequest {
+            request_id,
+            owner,
+            accept,
+        } => {
+            match state.respond_to_request(&request_id, &owner, accept).await {
+                Ok((message, request)) => DirectoryMessage::RespondToRequestResponse {
+                    success: true,
+                    message,
+                    request: Some(request),
+                },
+                Err(e) => DirectoryMessage::RespondToRequestResponse {
+                    success: false,
+                    message: format!("Failed to respond: {}", e),
+                    request: None,
+                },
+            }
+        }
+
+        DirectoryMessage::GetNotifications { username } => {
+            let notifications = state.get_notifications_for_user(&username).await;
+            DirectoryMessage::GetNotificationsResponse { notifications }
+        }
+
+        DirectoryMessage::StorePendingPermissionUpdate {
+            from_owner,
+            target_user,
+            image_id,
+            new_quota,
+        } => {
+            let update_id = state
+                .store_pending_permission_update(&from_owner, &target_user, &image_id, new_quota)
+                .await;
+
+            state.save_to_disk().await?;
+            state.replicate_state().await;
+
+            DirectoryMessage::StorePendingPermissionUpdateResponse {
+                success: true,
+                message: format!(
+                    "Permission update queued for user '{}'. Will be applied when they come online.",
+                    target_user
+                ),
+                update_id,
+            }
+        }
+
+        DirectoryMessage::GetPendingPermissionUpdates { username } => {
+            let updates = state.get_and_clear_pending_updates(&username).await;
+            
+            // Persist and replicate the cleared state
+            if !updates.is_empty() {
+                if let Err(e) = state.save_to_disk().await {
+                    error!("Failed to save state after clearing pending updates: {}", e);
+                }
+                state.replicate_state().await;
+            }
+            
+            DirectoryMessage::GetPendingPermissionUpdatesResponse { updates }
+        }
+
         _ => {
             bail!("Unexpected message type from {}", addr);
         }

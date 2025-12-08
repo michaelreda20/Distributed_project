@@ -3,14 +3,19 @@
     "username": "bob",
     "p2p_address": "0.0.0.0:8002",
     "last_heartbeat": {
-      "secs_since_epoch": 1764778830,
-      "nanos_since_epoch": 198437472
+      "secs_since_epoch": 1764862803,
+      "nanos_since_epoch": 494006154
     },
     "status": "Offline",
     "shared_images": [
       {
         "image_id": "encrypted_vacation.png",
         "image_name": "encrypted_vacation.png",
+        "thumbnail_path": null
+      },
+      {
+        "image_id": "vacation.png",
+        "image_name": "vacation.png",
         "thumbnail_path": null
       }
     ]
@@ -19,8 +24,8 @@
     "username": "alice",
     "p2p_address": "0.0.0.0:8001",
     "last_heartbeat": {
-      "secs_since_epoch": 1764778413,
-      "nanos_since_epoch": 205004252
+      "secs_since_epoch": 1764862808,
+      "nanos_since_epoch": 335113849
     },
     "status": "Offline",
     "shared_images": [

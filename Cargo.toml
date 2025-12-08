@@ -29,6 +29,9 @@ env_logger = "0.11"
 
 libc = "0.2"
 
+# For generating unique request IDs
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
  [[bin]]
    name = "directory_server"
    path = "src/bin/directory_server.rs"

@@ -1,34 +1,82 @@
 {
-  "alice": {
-    "username": "alice",
-    "p2p_address": "0.0.0.0:8001",
-    "last_heartbeat": {
-      "secs_since_epoch": 1764778413,
-      "nanos_since_epoch": 205004252
+  "users": {
+    "charlie": {
+      "username": "charlie",
+      "p2p_address": "127.0.0.1:8002",
+      "last_heartbeat": {
+        "secs_since_epoch": 1765151017,
+        "nanos_since_epoch": 620123956
+      },
+      "status": "Online",
+      "shared_images": [
+        {
+          "image_id": "my_image.png",
+          "image_name": "my_image.png",
+          "thumbnail_path": null
+        },
+        {
+          "image_id": "encrypted_photo1.png",
+          "image_name": "encrypted_photo1.png",
+          "thumbnail_path": null
+        }
+      ]
     },
-    "status": "Offline",
-    "shared_images": [
-      {
-        "image_id": "encrypted_photo1.png",
-        "image_name": "encrypted_photo1.png",
-        "thumbnail_path": null
-      }
-    ]
+    "bob": {
+      "username": "bob",
+      "p2p_address": "127.0.0.1:8001",
+      "last_heartbeat": {
+        "secs_since_epoch": 1765151011,
+        "nanos_since_epoch": 248782630
+      },
+      "status": "Online",
+      "shared_images": [
+        {
+          "image_id": "my_image.png",
+          "image_name": "my_image.png",
+          "thumbnail_path": null
+        },
+        {
+          "image_id": "from_charlie.png",
+          "image_name": "from_charlie.png",
+          "thumbnail_path": null
+        }
+      ]
+    },
+    "alice": {
+      "username": "alice",
+      "p2p_address": "127.0.0.1:8001",
+      "last_heartbeat": {
+        "secs_since_epoch": 1764872723,
+        "nanos_since_epoch": 107251805
+      },
+      "status": "Offline",
+      "shared_images": [
+        {
+          "image_id": "my_image.png",
+          "image_name": "my_image.png",
+          "thumbnail_path": null
+        },
+        {
+          "image_id": "encrypted_photo1.png",
+          "image_name": "encrypted_photo1.png",
+          "thumbnail_path": null
+        }
+      ]
+    }
   },
-  "bob": {
-    "username": "bob",
-    "p2p_address": "0.0.0.0:8002",
-    "last_heartbeat": {
-      "secs_since_epoch": 1764778830,
-      "nanos_since_epoch": 198437472
-    },
-    "status": "Online",
-    "shared_images": [
-      {
-        "image_id": "encrypted_vacation.png",
-        "image_name": "encrypted_vacation.png",
-        "thumbnail_path": null
-      }
-    ]
-  }
+  "pending_requests": {
+    "904f05ef-24f3-4b50-8531-40c59f85e067": {
+      "request_id": "904f05ef-24f3-4b50-8531-40c59f85e067",
+      "from_user": "bob",
+      "to_user": "charlie",
+      "image_id": "encrypted_photo1.png",
+      "requested_views": 3,
+      "timestamp": {
+        "secs_since_epoch": 1765150650,
+        "nanos_since_epoch": 878111218
+      },
+      "status": "Rejected"
+    }
+  },
+  "pending_permission_updates": {}
 }

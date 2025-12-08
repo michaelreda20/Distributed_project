@@ -1,34 +1,82 @@
 {
-  "bob": {
-    "username": "bob",
-    "p2p_address": "0.0.0.0:8002",
-    "last_heartbeat": {
-      "secs_since_epoch": 1764778830,
-      "nanos_since_epoch": 198437472
+  "users": {
+    "charlie": {
+      "username": "charlie",
+      "p2p_address": "127.0.0.1:8002",
+      "last_heartbeat": {
+        "secs_since_epoch": 1765151187,
+        "nanos_since_epoch": 681945429
+      },
+      "status": "Online",
+      "shared_images": [
+        {
+          "image_id": "my_image.png",
+          "image_name": "my_image.png",
+          "thumbnail_path": null
+        },
+        {
+          "image_id": "encrypted_photo1.png",
+          "image_name": "encrypted_photo1.png",
+          "thumbnail_path": null
+        }
+      ]
     },
-    "status": "Online",
-    "shared_images": [
-      {
-        "image_id": "encrypted_vacation.png",
-        "image_name": "encrypted_vacation.png",
-        "thumbnail_path": null
-      }
-    ]
+    "bob": {
+      "username": "bob",
+      "p2p_address": "127.0.0.1:8001",
+      "last_heartbeat": {
+        "secs_since_epoch": 1765151191,
+        "nanos_since_epoch": 321167201
+      },
+      "status": "Online",
+      "shared_images": [
+        {
+          "image_id": "my_image.png",
+          "image_name": "my_image.png",
+          "thumbnail_path": null
+        },
+        {
+          "image_id": "from_charlie.png",
+          "image_name": "from_charlie.png",
+          "thumbnail_path": null
+        }
+      ]
+    },
+    "alice": {
+      "username": "alice",
+      "p2p_address": "127.0.0.1:8001",
+      "last_heartbeat": {
+        "secs_since_epoch": 1764872723,
+        "nanos_since_epoch": 107251805
+      },
+      "status": "Offline",
+      "shared_images": [
+        {
+          "image_id": "my_image.png",
+          "image_name": "my_image.png",
+          "thumbnail_path": null
+        },
+        {
+          "image_id": "encrypted_photo1.png",
+          "image_name": "encrypted_photo1.png",
+          "thumbnail_path": null
+        }
+      ]
+    }
   },
-  "alice": {
-    "username": "alice",
-    "p2p_address": "0.0.0.0:8001",
-    "last_heartbeat": {
-      "secs_since_epoch": 1764778413,
-      "nanos_since_epoch": 205004252
-    },
-    "status": "Offline",
-    "shared_images": [
-      {
-        "image_id": "encrypted_photo1.png",
-        "image_name": "encrypted_photo1.png",
-        "thumbnail_path": null
-      }
-    ]
-  }
+  "pending_requests": {
+    "d5bef952-a2a9-401d-99e2-93d0db5f1aac": {
+      "request_id": "d5bef952-a2a9-401d-99e2-93d0db5f1aac",
+      "from_user": "bob",
+      "to_user": "charlie",
+      "image_id": "encrypted_photo1.png",
+      "requested_views": 3,
+      "timestamp": {
+        "secs_since_epoch": 1765151118,
+        "nanos_since_epoch": 677639439
+      },
+      "status": "Pending"
+    }
+  },
+  "pending_permission_updates": {}
 }
