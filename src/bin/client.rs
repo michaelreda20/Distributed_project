@@ -70,10 +70,6 @@ enum Commands {
         #[arg(short, long)]
         port: u16,
         
-        /// Directory of images to share
-        #[arg(short, long)]
-        images_dir: PathBuf,
-        
         /// Directory service address (optional, will multicast if not specified)
         #[arg(short, long)]
         directory: Option<String>,
@@ -239,10 +235,9 @@ async fn main() -> Result<()> {
         Commands::StartPeer {
             username,
             port,
-            images_dir,
             directory,
         } => {
-            handle_start_peer(username, *port, images_dir, directory.as_deref()).await?;
+            handle_start_peer(username, *port, directory.as_deref()).await?;
         }
         Commands::DiscoverPeers { username, directory } => {
             handle_discover_peers(username, directory.as_deref()).await?;
@@ -700,9 +695,11 @@ fn handle_view(input_path: &PathBuf, current_user: &String) -> Result<()> {
 async fn handle_start_peer(
     username: &str,
     port: u16,
-    images_dir: &PathBuf,
     directory_addr: Option<&str>,
 ) -> Result<()> {
+    // Use current directory as images directory
+    let images_dir = std::env::current_dir()?;
+    
     println!("=== Starting P2P Peer ===");
     println!("Username: {}", username);
     println!("P2P Port: {}", port);
@@ -761,7 +758,7 @@ async fn handle_start_peer(
     // Register with directory service (with multicast support)
     // Use 127.0.0.1 instead of 0.0.0.0 so other peers can connect
     //CHANGEEEEE
-    let p2p_address = format!("127.0.0.1:{}", port);
+    let p2p_address = format!("10.7.57.229:{}", port);
     let register_msg = DirectoryMessage::Register {
         username: username.to_string(),
         p2p_address: p2p_address.clone(),
