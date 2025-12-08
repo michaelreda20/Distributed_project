@@ -124,29 +124,6 @@ enum Commands {
         directory: Option<String>,
     },
 
-    /// Update permissions for a user on your shared image (owner only)
-    UpdatePermissions {
-        /// Your username (must be the owner)
-        #[arg(short, long)]
-        owner: String,
-
-        /// Image ID to update
-        #[arg(short, long)]
-        image_id: String,
-
-        /// Username to update permissions for
-        #[arg(short, long)]
-        username: String,
-
-        /// New quota (0 to revoke access)
-        #[arg(short, long)]
-        new_quota: u32,
-
-        /// Directory service address (optional, will multicast if not specified)
-        #[arg(short, long)]
-        directory: Option<String>,
-    },
-
     /// Check pending image requests (for owners)
     CheckRequests {
         /// Your username
@@ -253,15 +230,6 @@ async fn main() -> Result<()> {
             directory,
         } => {
             handle_list_peer_images(username, peer, directory.as_deref()).await?;
-        }
-        Commands::UpdatePermissions {
-            owner,
-            image_id,
-            username,
-            new_quota,
-            directory,
-        } => {
-            handle_update_permissions(owner, image_id, username, *new_quota, directory.as_deref()).await?;
         }
         Commands::CheckRequests { username, directory } => {
             handle_check_requests(username, directory.as_deref()).await?;
