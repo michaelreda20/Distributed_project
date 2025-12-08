@@ -1624,87 +1624,107 @@ async fn handle_respond_request(
                             username: req.from_user.clone(),
                         };
 
+                        // First, fetch the image from our own P2P server (with updated permissions)
+                        use cloud_p2p_project::p2p_protocol::{P2PMessage, send_p2p_message, request_image_from_peer};
+
+                        // Query directory to get our own P2P address
+                        let self_query = DirectoryMessage::QueryUser {
+                            username: owner.to_string(),
+                        };
+
+                        let encrypted_image = match send_directory_or_multicast(directory_addr, self_query).await {
+                            Ok(DirectoryMessage::QueryUserResponse { user: Some(self_user) }) => {
+                                // Fetch the image from our own P2P server AS THE OWNER
+                                // (so quota doesn't get decremented)
+                                match request_image_from_peer(
+                                    &self_user.p2p_address,
+                                    owner,  // Request as owner, not as the requester
+                                    &req.image_id,
+                                    req.requested_views,
+                                )
+                                .await
+                                {
+                                    Ok(img) => {
+                                        println!("✓ Image fetched successfully");
+                                        Some(img)
+                                    }
+                                    Err(e) => {
+                                        eprintln!("\n⚠ Failed to fetch image: {}", e);
+                                        None
+                                    }
+                                }
+                            }
+                            _ => {
+                                eprintln!("\n⚠ Could not find own P2P server");
+                                None
+                            }
+                        };
+
+                        if encrypted_image.is_none() {
+                            println!("💡 {} can manually request the image when ready", req.from_user);
+                            return Ok(());
+                        }
+
+                        let encrypted_image = encrypted_image.unwrap();
+
+                        // Now check if requester is online and try to deliver
                         match send_directory_or_multicast(directory_addr, query_msg).await {
                             Ok(DirectoryMessage::QueryUserResponse { user: Some(user) }) => {
                                 use cloud_p2p_project::directory_service::UserStatus;
                                 if user.status == UserStatus::Online {
                                     println!("✓ {} is online at {}", req.from_user, user.p2p_address);
-                                    println!("🚀 Fetching image to deliver to {}...", req.from_user);
+                                    println!("🚀 Attempting to deliver image to {}...", req.from_user);
 
-                                    // First, fetch the image from our own P2P server (with updated permissions)
-                                    use cloud_p2p_project::p2p_protocol::{P2PMessage, send_p2p_message, request_image_from_peer};
+                                    // Clone image for fallback
+                                    let image_for_fallback = encrypted_image.clone();
 
-                                    // Query directory to get our own P2P address
-                                    let self_query = DirectoryMessage::QueryUser {
-                                        username: owner.to_string(),
+                                    // Try to deliver the image to the requester
+                                    let deliver_msg = P2PMessage::DeliverImage {
+                                        from_owner: owner.to_string(),
+                                        image_id: req.image_id.clone(),
+                                        requested_views: req.requested_views,
+                                        encrypted_image,
                                     };
 
-                                    match send_directory_or_multicast(directory_addr, self_query).await {
-                                        Ok(DirectoryMessage::QueryUserResponse { user: Some(self_user) }) => {
-                                            // Fetch the image from our own P2P server AS THE OWNER
-                                            // (so quota doesn't get decremented)
-                                            match request_image_from_peer(
-                                                &self_user.p2p_address,
-                                                owner,  // Request as owner, not as the requester
-                                                &req.image_id,
-                                                req.requested_views,
-                                            )
-                                            .await
-                                            {
-                                                Ok(encrypted_image) => {
-                                                    println!("✓ Image fetched, now delivering to {}...", req.from_user);
-
-                                                    // Now deliver the image to the requester
-                                                    let deliver_msg = P2PMessage::DeliverImage {
-                                                        from_owner: owner.to_string(),
-                                                        image_id: req.image_id.clone(),
-                                                        requested_views: req.requested_views,
-                                                        encrypted_image,
-                                                    };
-
-                                                    match send_p2p_message(&user.p2p_address, deliver_msg).await {
-                                                        Ok(P2PMessage::DeliverImageResponse { success: true, message }) => {
-                                                            println!("\n✅ Image delivered successfully to {}!", req.from_user);
-                                                            println!("   {}", message);
-                                                        }
-                                                        Ok(P2PMessage::DeliverImageResponse { success: false, message }) => {
-                                                            eprintln!("\n⚠ Failed to deliver image: {}", message);
-                                                            println!("💡 {} can manually request the image when ready", req.from_user);
-                                                        }
-                                                        Err(e) => {
-                                                            eprintln!("\n⚠ Could not deliver image to {}: {}", req.from_user, e);
-                                                            println!("💡 {} can manually request the image when ready", req.from_user);
-                                                        }
-                                                        _ => {
-                                                            eprintln!("\n⚠ Unexpected response when delivering image");
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("\n⚠ Failed to fetch image for delivery: {}", e);
-                                                    println!("💡 {} can manually request the image when ready", req.from_user);
-                                                }
-                                            }
+                                    match send_p2p_message(&user.p2p_address, deliver_msg).await {
+                                        Ok(P2PMessage::DeliverImageResponse { success: true, message }) => {
+                                            println!("\n✅ Image delivered successfully to {}!", req.from_user);
+                                            println!("   {}", message);
+                                        }
+                                        Ok(P2PMessage::DeliverImageResponse { success: false, message }) => {
+                                            eprintln!("\n⚠ Failed to deliver image: {}", message);
+                                            println!("📝 Storing image for delivery when {} is fully online...", req.from_user);
+                                            store_pending_update_with_image(directory_addr, owner, &req.from_user, &req.image_id, req.requested_views, image_for_fallback).await;
+                                        }
+                                        Err(e) => {
+                                            eprintln!("\n⚠ Could not deliver image to {} (connection failed: {})", req.from_user, e);
+                                            println!("📝 Storing image for delivery when {} is fully online...", req.from_user);
+                                            store_pending_update_with_image(directory_addr, owner, &req.from_user, &req.image_id, req.requested_views, image_for_fallback).await;
                                         }
                                         _ => {
-                                            eprintln!("\n⚠ Could not find own P2P server");
-                                            println!("💡 {} can manually request the image when ready", req.from_user);
+                                            eprintln!("\n⚠ Unexpected response when delivering image");
+                                            println!("📝 Storing image for delivery when {} is fully online...", req.from_user);
+                                            store_pending_update_with_image(directory_addr, owner, &req.from_user, &req.image_id, req.requested_views, image_for_fallback).await;
                                         }
                                     }
                                 } else {
-                                    println!("ℹ {} is offline. They will receive the image when they come online.", req.from_user);
-                                    println!("💡 {} can request the image with:", req.from_user);
-                                    println!("   cargo run --bin client -- request-image --username {} --peer {} --image-id {} --views {} --output <PATH>",
-                                             req.from_user, owner, req.image_id, req.requested_views);
+                                    println!("ℹ {} is offline. Storing image for delivery when they come online...", req.from_user);
+                                    store_pending_update_with_image(directory_addr, owner, &req.from_user, &req.image_id, req.requested_views, encrypted_image).await;
                                 }
                             }
                             Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
-                                println!("ℹ {} is not online. They can request the image when they come online.", req.from_user);
+                                println!("ℹ {} is not online. Storing image for delivery when they register...", req.from_user);
+                                store_pending_update_with_image(directory_addr, owner, &req.from_user, &req.image_id, req.requested_views, encrypted_image).await;
                             }
                             Err(e) => {
                                 eprintln!("⚠ Could not check if {} is online: {}", req.from_user, e);
+                                println!("📝 Storing image for delivery as fallback...");
+                                store_pending_update_with_image(directory_addr, owner, &req.from_user, &req.image_id, req.requested_views, encrypted_image).await;
                             }
-                            _ => {}
+                            _ => {
+                                println!("📝 Storing image for delivery as fallback...");
+                                store_pending_update_with_image(directory_addr, owner, &req.from_user, &req.image_id, req.requested_views, encrypted_image).await;
+                            }
                         }
                     }
                     Err(e) => {
