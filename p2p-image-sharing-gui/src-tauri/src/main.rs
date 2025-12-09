@@ -400,10 +400,10 @@ async fn go_online(
                 *state.local_images.lock().map_err(|e| e.to_string())? = local_images_list.clone();
                 *state.p2p_address.lock().map_err(|e| e.to_string())? = Some(p2p_address.clone());
                 
-                // Set received images directory in the image store
+                // Set received images directory in the image store to the received/ subfolder
                 {
                     let mut store = state.image_store.write().await;
-                    store.set_received_images_dir(images_path.clone());
+                    store.set_received_images_dir(received_dir.clone());
                 }
                 
                 // Start P2P server in background
