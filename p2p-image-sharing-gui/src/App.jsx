@@ -116,7 +116,8 @@ function App() {
       await Promise.all([
         fetchPeers(),
         fetchPendingRequests(),
-        fetchNotifications()
+        fetchNotifications(),
+        fetchReceivedImages()
       ]);
     };
 
@@ -147,7 +148,8 @@ function App() {
         await Promise.all([
           fetchPeers(),
           fetchPendingRequests(),
-          fetchNotifications()
+          fetchNotifications(),
+          fetchReceivedImages()
         ]);
       } else {
         showToast(response.message, 'error');
@@ -213,6 +215,18 @@ function App() {
       console.error('Failed to fetch notifications:', error);
     }
     setLoading(prev => ({ ...prev, notifications: false }));
+  };
+
+  const fetchReceivedImages = async () => {
+    try {
+      const response = await invoke('get_received_images');
+      console.log('Received images response:', response);
+      if (response.success) {
+        setReceivedImages(response.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch received images:', error);
+    }
   };
 
   // Request handlers
@@ -298,6 +312,8 @@ function App() {
       } else {
         showToast(response.message, 'error');
       }
+      // Also fetch received images
+      await fetchReceivedImages();
     } catch (error) {
       showToast(`Failed to refresh images: ${error}`, 'error');
     }

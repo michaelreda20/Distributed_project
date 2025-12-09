@@ -333,37 +333,9 @@ async fn go_online(
         }
     }
 
-    // Also scan encrypted folder and add to local images list
-    if encrypted_dir.exists() && encrypted_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&encrypted_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension() {
-                        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
-                        if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
-                            let file_name = path.file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let image_id = file_name.clone();
-                            let file_size = fs::metadata(&path)
-                                .map(|m| m.len() / 1024)
-                                .unwrap_or(0);
-
-                            local_images_list.push(LocalImage {
-                                image_id: image_id.clone(),
-                                file_path: path.to_string_lossy().to_string(),
-                                file_name: file_name.clone(),
-                                file_size_kb: file_size,
-                                is_encrypted: true,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // NOTE: We only show images from the main directory the user entered
+    // Encrypted images (in the /encrypted subfolder) are NOT shown in local images
+    // They are only used for sharing with peers
     
     // Get local IP address dynamically
     let local_ip = match get_local_ip() {
@@ -927,92 +899,110 @@ async fn get_local_images(
 async fn get_received_images(
     state: State<'_, AppState>,
 ) -> Result<ApiResponse<Vec<ReceivedImage>>, String> {
-    // Scan the received images directory for encrypted images
-    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
+    // Scan the received images directory for ALL images
     let username = state.username.lock().map_err(|e| e.to_string())?.clone();
+    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
 
     let mut received_list: Vec<ReceivedImage> = Vec::new();
 
-    if let Some(images_path) = images_directory {
-        let received_dir = images_path.join("received");
-        if received_dir.exists() && received_dir.is_dir() {
-            if let Ok(entries) = fs::read_dir(&received_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Some(ext) = path.extension() {
-                            let ext_str = ext.to_str().unwrap_or("").to_lowercase();
-                            if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
-                                // Try to read the image and check if it's encrypted
-                                if let Ok(data) = fs::read(&path) {
-                                    if let Ok(img) = image::load_from_memory(&data) {
-                                        if let Ok(Some(payload_bytes)) = lsb::decode(&img) {
-                                            // This is an encrypted image, decode the metadata
-                                            if let Ok(combined_data) = bincode::deserialize::<CombinedPayload>(&payload_bytes) {
-                                                let permissions = combined_data.permissions;
-                                                let file_name = path.file_name()
-                                                    .and_then(|n| n.to_str())
-                                                    .unwrap_or("unknown")
-                                                    .to_string();
+    // Get the received directory from the user's images directory (entered in the GUI)
+    let received_dir = match images_directory {
+        Some(images_path) => images_path.join("received"),
+        None => {
+            // Fallback: user not connected yet, return empty list
+            return Ok(ApiResponse {
+                success: true,
+                message: "Not connected - no images directory configured".to_string(),
+                data: Some(received_list),
+            });
+        }
+    };
+    
+    eprintln!("Scanning directory: {:?}", received_dir);
+    eprintln!("Directory exists: {}", received_dir.exists());
+    
+    if received_dir.exists() && received_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&received_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                eprintln!("Found file: {:?}", path);
+                
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
+                        if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
+                            let file_name = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
 
-                                                // Get views remaining for current user
-                                                let views_remaining = if let Some(user) = &username {
-                                                    permissions.quotas.get(user).copied().unwrap_or(0)
-                                                } else {
-                                                    0
-                                                };
+                            // Try to extract owner and views from encrypted data, use defaults if not available
+                            let mut from_owner = "Unknown".to_string();
+                            let mut views_remaining: u32 = 0;
 
-                                                // Try to extract timestamp from file metadata
-                                                let received_at = match fs::metadata(&path)
-                                                    .and_then(|m| m.modified())
-                                                {
-                                                    Ok(modified_time) => {
-                                                        match modified_time.duration_since(SystemTime::UNIX_EPOCH) {
-                                                            Ok(d) => {
-                                                                let secs = d.as_secs();
-                                                                let now_secs = SystemTime::now()
-                                                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                                                    .map(|n| n.as_secs())
-                                                                    .unwrap_or(0);
-                                                                let diff = now_secs.saturating_sub(secs);
-                                                                let mins = diff / 60;
-                                                                let hours = mins / 60;
-                                                                let days = hours / 24;
-                                                                if days > 0 {
-                                                                    format!("{} days ago", days)
-                                                                } else if hours > 0 {
-                                                                    format!("{} hours ago", hours)
-                                                                } else if mins > 0 {
-                                                                    format!("{} mins ago", mins)
-                                                                } else {
-                                                                    "Just now".to_string()
-                                                                }
-                                                            }
-                                                            Err(_) => "Unknown".to_string()
-                                                        }
-                                                    }
-                                                    Err(_) => "Unknown".to_string()
-                                                };
-
-                                                received_list.push(ReceivedImage {
-                                                    image_id: file_name.clone(),
-                                                    from_owner: permissions.owner,
-                                                    file_path: path.to_string_lossy().to_string(),
-                                                    file_name,
-                                                    views_remaining,
-                                                    received_at,
-                                                });
+                            // Try to read encrypted metadata if available
+                            if let Ok(data) = fs::read(&path) {
+                                if let Ok(img) = image::load_from_memory(&data) {
+                                    if let Ok(Some(payload_bytes)) = lsb::decode(&img) {
+                                        if let Ok(combined_data) = bincode::deserialize::<CombinedPayload>(&payload_bytes) {
+                                            let permissions = combined_data.permissions;
+                                            from_owner = permissions.owner.clone();
+                                            if let Some(user) = &username {
+                                                views_remaining = permissions.quotas.get(user).copied().unwrap_or(0);
                                             }
                                         }
                                     }
                                 }
                             }
+
+                            // Get timestamp from file metadata
+                            let received_at = match fs::metadata(&path).and_then(|m| m.modified()) {
+                                Ok(modified_time) => {
+                                    match modified_time.duration_since(SystemTime::UNIX_EPOCH) {
+                                        Ok(d) => {
+                                            let secs = d.as_secs();
+                                            let now_secs = SystemTime::now()
+                                                .duration_since(SystemTime::UNIX_EPOCH)
+                                                .map(|n| n.as_secs())
+                                                .unwrap_or(0);
+                                            let diff = now_secs.saturating_sub(secs);
+                                            let mins = diff / 60;
+                                            let hours = mins / 60;
+                                            let days = hours / 24;
+                                            if days > 0 {
+                                                format!("{} days ago", days)
+                                            } else if hours > 0 {
+                                                format!("{} hours ago", hours)
+                                            } else if mins > 0 {
+                                                format!("{} mins ago", mins)
+                                            } else {
+                                                "Just now".to_string()
+                                            }
+                                        }
+                                        Err(_) => "Unknown".to_string()
+                                    }
+                                }
+                                Err(_) => "Unknown".to_string()
+                            };
+
+                            eprintln!("Adding image: {} from {}", file_name, from_owner);
+                            
+                            received_list.push(ReceivedImage {
+                                image_id: file_name.clone(),
+                                from_owner,
+                                file_path: path.to_string_lossy().to_string(),
+                                file_name,
+                                views_remaining,
+                                received_at,
+                            });
                         }
                     }
                 }
             }
         }
     }
+
+    eprintln!("Total received images found: {}", received_list.len());
 
     // Update state
     *state.received_images.lock().map_err(|e| e.to_string())? = received_list.clone();
@@ -1135,31 +1125,85 @@ async fn refresh_images(
         }
     }
 
-    // Also add encrypted images to local list
-    if encrypted_dir.exists() && encrypted_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&encrypted_dir) {
+    // NOTE: We only show images from the main directory the user entered
+    // Encrypted images (in the /encrypted subfolder) are NOT shown in local images
+
+    // Update the local images in state
+    *state.local_images.lock().map_err(|e| e.to_string())? = local_images_list.clone();
+
+    // ALSO refresh received images
+    let mut received_list: Vec<ReceivedImage> = Vec::new();
+    if received_dir.exists() && received_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&received_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() {
                     if let Some(ext) = path.extension() {
                         let ext_str = ext.to_str().unwrap_or("").to_lowercase();
                         if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
-                            let file_name = path.file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let image_id = file_name.clone();
-                            let file_size = fs::metadata(&path)
-                                .map(|m| m.len() / 1024)
-                                .unwrap_or(0);
+                            // Try to read the image and check if it's encrypted
+                            if let Ok(data) = fs::read(&path) {
+                                if let Ok(img) = image::load_from_memory(&data) {
+                                    if let Ok(Some(payload_bytes)) = lsb::decode(&img) {
+                                        // This is an encrypted image, decode the metadata
+                                        if let Ok(combined_data) = bincode::deserialize::<CombinedPayload>(&payload_bytes) {
+                                            let permissions = combined_data.permissions;
+                                            let file_name = path.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("unknown")
+                                                .to_string();
 
-                            local_images_list.push(LocalImage {
-                                image_id: image_id.clone(),
-                                file_path: path.to_string_lossy().to_string(),
-                                file_name: file_name.clone(),
-                                file_size_kb: file_size,
-                                is_encrypted: true,
-                            });
+                                            // Get views remaining for current user
+                                            let views_remaining = if let Some(current_user) = &username {
+                                                permissions.quotas.get(current_user).copied().unwrap_or(0)
+                                            } else {
+                                                0
+                                            };
+
+                                            // Try to extract timestamp from file metadata
+                                            let received_at = match fs::metadata(&path)
+                                                .and_then(|m| m.modified())
+                                            {
+                                                Ok(modified_time) => {
+                                                    match modified_time.duration_since(SystemTime::UNIX_EPOCH) {
+                                                        Ok(d) => {
+                                                            let secs = d.as_secs();
+                                                            let now_secs = SystemTime::now()
+                                                                .duration_since(SystemTime::UNIX_EPOCH)
+                                                                .map(|n| n.as_secs())
+                                                                .unwrap_or(0);
+                                                            let diff = now_secs.saturating_sub(secs);
+                                                            let mins = diff / 60;
+                                                            let hours = mins / 60;
+                                                            let days = hours / 24;
+                                                            if days > 0 {
+                                                                format!("{} days ago", days)
+                                                            } else if hours > 0 {
+                                                                format!("{} hours ago", hours)
+                                                            } else if mins > 0 {
+                                                                format!("{} mins ago", mins)
+                                                            } else {
+                                                                "Just now".to_string()
+                                                            }
+                                                        }
+                                                        Err(_) => "Unknown".to_string()
+                                                    }
+                                                }
+                                                Err(_) => "Unknown".to_string()
+                                            };
+
+                                            received_list.push(ReceivedImage {
+                                                image_id: file_name.clone(),
+                                                from_owner: permissions.owner,
+                                                file_path: path.to_string_lossy().to_string(),
+                                                file_name,
+                                                views_remaining,
+                                                received_at,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1167,8 +1211,8 @@ async fn refresh_images(
         }
     }
 
-    // Update the local images in state
-    *state.local_images.lock().map_err(|e| e.to_string())? = local_images_list.clone();
+    // Update received images in state
+    *state.received_images.lock().map_err(|e| e.to_string())? = received_list.clone();
 
     // IMPORTANT: Update the directory service with the new shared images list
     // This ensures other peers see the updated list when they query
@@ -1194,7 +1238,7 @@ async fn refresh_images(
 
     Ok(ApiResponse {
         success: true,
-        message: format!("Refreshed: Found {} images", local_images_list.len()),
+        message: format!("Refreshed: Found {} local images and {} received images", local_images_list.len(), received_list.len()),
         data: Some(local_images_list),
     })
 }
