@@ -26,7 +26,7 @@ use cloud_p2p_project::p2p_protocol::{
     ImageMetadata, PeerImageStore, P2PMessage, send_p2p_message,
     list_peer_images, request_image_from_peer, start_p2p_server,
 };
-use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions};
+use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions, get_local_ip};
 
 // ============================================================================
 // APP STATE
@@ -275,8 +275,22 @@ async fn go_online(
         }
     }
     
-    // Get local IP - hardcoded for now, should match your network
-    let p2p_address = format!("10.7.57.229:{}", port);
+    // Get local IP address dynamically
+    let local_ip = match get_local_ip() {
+        Ok(ip) => {
+            eprintln!("Detected local IP: {}", ip);
+            ip
+        }
+        Err(e) => {
+            eprintln!("Failed to detect local IP: {}, falling back to 0.0.0.0", e);
+            return Ok(ApiResponse {
+                success: false,
+                message: format!("Failed to detect local IP address: {}. Please check your network connection.", e),
+                data: None,
+            });
+        }
+    };
+    let p2p_address = format!("{}:{}", local_ip, port);
     
     // Register with directory service
     let register_msg = DirectoryMessage::Register {

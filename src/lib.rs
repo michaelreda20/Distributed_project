@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
+use std::net::UdpSocket;
+use anyhow::Result;
 
 // This line makes our custom modules available
 pub mod lsb;
@@ -115,4 +117,16 @@ pub enum LoadBalancingMessage {
     WorkResult {
         encrypted_image: Vec<u8>,
     },
+}
+
+// --- NETWORK UTILITIES ---
+
+/// Get the local IP address by connecting to a public DNS server
+/// This doesn't actually send any data, just determines which network interface would be used
+pub fn get_local_ip() -> Result<String> {
+    // Connect to Google's DNS (doesn't actually send data, just determines routing)
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.connect("8.8.8.8:80")?;
+    let local_addr = socket.local_addr()?;
+    Ok(local_addr.ip().to_string())
 }

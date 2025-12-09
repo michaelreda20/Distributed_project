@@ -2,10 +2,10 @@ use anyhow::{bail, Result};
 use bincode;
 use cloud_p2p_project::directory_service::{DirectoryMessage, ImageInfo, send_directory_message};
 use cloud_p2p_project::p2p_protocol::{
-    ImageMetadata, PeerImageStore, 
+    ImageMetadata, PeerImageStore,
     list_peer_images, start_p2p_server,
 };
-use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions};
+use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions, get_local_ip};
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::fs;
@@ -722,10 +722,17 @@ async fn handle_start_peer(
     
     println!("Found {} images to share", shared_images.len());
 
-    // Register with directory service (with multicast support)
-    // Use 127.0.0.1 instead of 0.0.0.0 so other peers can connect
-    //CHANGEEEEE
-    let p2p_address = format!("10.7.57.229:{}", port);
+    // Get local IP address dynamically
+    let local_ip = match get_local_ip() {
+        Ok(ip) => {
+            println!("Detected local IP: {}", ip);
+            ip
+        }
+        Err(e) => {
+            bail!("Failed to detect local IP address: {}. Please check your network connection.", e);
+        }
+    };
+    let p2p_address = format!("{}:{}", local_ip, port);
     let register_msg = DirectoryMessage::Register {
         username: username.to_string(),
         p2p_address: p2p_address.clone(),
