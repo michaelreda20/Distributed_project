@@ -999,6 +999,11 @@ async fn get_received_images(
                                 .unwrap_or("unknown")
                                 .to_string();
 
+                            // Skip the viewable_image.png temp file
+                            if file_name == "viewable_image.png" {
+                                continue;
+                            }
+
                             // Try to extract owner and views from encrypted data, use defaults if not available
                             let mut from_owner = "Unknown".to_string();
                             let mut views_remaining: u32 = 0;
@@ -1661,6 +1666,107 @@ async fn list_peer_images_cmd(
 }
 
 // ============================================================================
+// PENDING PERMISSION UPDATES
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionUpdateInfo {
+    pub from_owner: String,
+    pub image_id: String,
+    pub new_quota: u32,
+    pub message: String,
+}
+
+#[tauri::command]
+async fn check_pending_permission_updates(
+    state: State<'_, AppState>,
+) -> Result<ApiResponse<Vec<PermissionUpdateInfo>>, String> {
+    let username = state.username.lock().map_err(|e| e.to_string())?.clone()
+        .ok_or("Not logged in")?;
+    let dir_servers = state.directory_servers.lock().map_err(|e| e.to_string())?.clone();
+    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
+    
+    let received_dir = match images_directory {
+        Some(path) => path.join("received"),
+        None => return Ok(ApiResponse {
+            success: false,
+            message: "Images directory not configured".to_string(),
+            data: None,
+        }),
+    };
+    
+    // Ensure received directory exists
+    let _ = fs::create_dir_all(&received_dir);
+    
+    let pending_msg = DirectoryMessage::GetPendingPermissionUpdates {
+        username: username.clone(),
+    };
+    
+    match multicast_directory_message(&dir_servers, pending_msg).await {
+        Ok(DirectoryMessage::GetPendingPermissionUpdatesResponse { updates }) => {
+            let mut processed_updates: Vec<PermissionUpdateInfo> = Vec::new();
+            
+            for update in updates {
+                let mut info = PermissionUpdateInfo {
+                    from_owner: update.from_owner.clone(),
+                    image_id: update.image_id.clone(),
+                    new_quota: update.new_quota,
+                    message: String::new(),
+                };
+                
+                // If there's an embedded image, save it
+                if let Some(embedded_image) = update.embedded_image {
+                    let save_name = format!("from_{}_{}", update.from_owner, update.image_id);
+                    let save_path = received_dir.join(&save_name);
+                    
+                    match fs::write(&save_path, &embedded_image) {
+                        Ok(_) => {
+                            if update.new_quota == 0 {
+                                info.message = format!(
+                                    "{} has REVOKED your access to image '{}'",
+                                    update.from_owner, update.image_id
+                                );
+                            } else {
+                                info.message = format!(
+                                    "{} has updated your permissions for image '{}' to {} views",
+                                    update.from_owner, update.image_id, update.new_quota
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            info.message = format!("Failed to save image: {}", e);
+                        }
+                    }
+                } else {
+                    info.message = format!(
+                        "{} updated permissions for image '{}' to {} views (no image delivered)",
+                        update.from_owner, update.image_id, update.new_quota
+                    );
+                }
+                
+                processed_updates.push(info);
+            }
+            
+            Ok(ApiResponse {
+                success: true,
+                message: format!("Processed {} pending updates", processed_updates.len()),
+                data: Some(processed_updates),
+            })
+        }
+        Err(e) => Ok(ApiResponse {
+            success: false,
+            message: format!("Failed to check updates: {}", e),
+            data: None,
+        }),
+        _ => Ok(ApiResponse {
+            success: false,
+            message: "Unexpected response".to_string(),
+            data: None,
+        }),
+    }
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -1687,6 +1793,7 @@ fn main() {
             view_image,
             send_heartbeat,
             list_peer_images_cmd,
+            check_pending_permission_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

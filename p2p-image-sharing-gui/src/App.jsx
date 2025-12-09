@@ -109,6 +109,38 @@ function App() {
     return () => clearInterval(heartbeatInterval);
   }, [isOnline, showToast]);
 
+  // Check for pending permission updates periodically
+  useEffect(() => {
+    if (!isOnline) return;
+
+    const checkPermissionUpdates = async () => {
+      try {
+        const response = await invoke('check_pending_permission_updates');
+        if (response.success && response.data && response.data.length > 0) {
+          // Show notifications for each update
+          for (const update of response.data) {
+            if (update.new_quota === 0) {
+              showToast(`⚠️ ${update.from_owner} revoked your access to "${update.image_id}"`, 'warning');
+            } else {
+              showToast(`📬 ${update.from_owner} updated your permissions for "${update.image_id}" (${update.new_quota} views)`, 'info');
+            }
+          }
+          // Refresh received images to show updates
+          await fetchReceivedImages();
+        }
+      } catch (error) {
+        console.error('Failed to check permission updates:', error);
+      }
+    };
+
+    // Check immediately on login
+    checkPermissionUpdates();
+    
+    // Then check every 15 seconds
+    const updateInterval = setInterval(checkPermissionUpdates, 15000);
+    return () => clearInterval(updateInterval);
+  }, [isOnline, showToast]);
+
   // Auto-refresh data when online
   useEffect(() => {
     if (!isOnline) return;
@@ -335,6 +367,25 @@ function App() {
     setLoading(prev => ({ ...prev, images: false }));
   };
 
+  const handleViewImage = async (imagePath) => {
+    try {
+      const response = await invoke('view_image', { imagePath });
+      if (response.success) {
+        showToast('Image viewed successfully!', 'success');
+        // Refresh received images to update the view count
+        await fetchReceivedImages();
+        // Return the path to the viewable image
+        return response.data;
+      } else {
+        showToast(response.message, 'error');
+        return null;
+      }
+    } catch (error) {
+      showToast(`Failed to view image: ${error}`, 'error');
+      return null;
+    }
+  };
+
   // Render panel based on active tab
   const renderPanel = () => {
     switch (activeTab) {
@@ -370,6 +421,7 @@ function App() {
             onEncrypt={handleEncryptImage}
             onUpdatePermissions={handleUpdatePermissions}
             onRefresh={refreshImages}
+            onViewImage={handleViewImage}
             loading={loading.images}
             isOnline={isOnline}
           />

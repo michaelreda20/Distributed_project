@@ -1,18 +1,21 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   Image, Upload, Lock, Unlock, Eye, Edit, Trash2,
   FolderOpen, HardDrive, Download, Search, Filter,
-  RefreshCw, Shield, WifiOff
+  RefreshCw, Shield, WifiOff, X
 } from 'lucide-react';
 
-function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, onUpdatePermissions, onRefresh, loading, isOnline }) {
+function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, onUpdatePermissions, onRefresh, onViewImage, loading, isOnline }) {
   const [activeTab, setActiveTab] = useState('local');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
   const [permissionModal, setPermissionModal] = useState(null);
   const [newQuota, setNewQuota] = useState(5);
   const [targetUser, setTargetUser] = useState('');
+  const [viewingImage, setViewingImage] = useState(null);
+  const [viewedImagePath, setViewedImagePath] = useState(null);
 
   const filteredLocalImages = localImages.filter(img =>
     img.file_name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -46,6 +49,32 @@ function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, 
       setTargetUser('');
       setNewQuota(5);
     }
+  };
+
+  const handleViewImage = async (image) => {
+    if (image.views_remaining <= 0) {
+      // No views remaining, show the cover image (the encrypted carrier)
+      setViewingImage({...image, views_remaining: 0});
+      setViewedImagePath(null); // Will display the cover/carrier image
+      return;
+    }
+    
+    // Attempt to view the image (decrements quota)
+    const viewablePath = await onViewImage(image.file_path);
+    if (viewablePath) {
+      // Successfully viewed - update the views count in the modal
+      setViewingImage({...image, views_remaining: image.views_remaining - 1});
+      setViewedImagePath(viewablePath);
+    } else {
+      // Access denied - show the cover image
+      setViewingImage({...image, views_remaining: 0});
+      setViewedImagePath(null);
+    }
+  };
+
+  const closeImageViewer = () => {
+    setViewingImage(null);
+    setViewedImagePath(null);
   };
 
   return (
@@ -367,11 +396,15 @@ function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, 
                       <motion.button
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
-                        disabled={image.views_remaining === 0}
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 mt-4 rounded-lg bg-gradient-to-r from-cyan-600/20 to-blue-600/20 border border-cyan-500/30 text-cyan-400 text-sm hover:from-cyan-600/30 hover:to-blue-600/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => handleViewImage(image)}
+                        className={`w-full flex items-center justify-center gap-2 px-3 py-2 mt-4 rounded-lg ${
+                          image.views_remaining === 0
+                            ? 'bg-gray-600/20 border border-gray-500/30 text-gray-400'
+                            : 'bg-gradient-to-r from-cyan-600/20 to-blue-600/20 border border-cyan-500/30 text-cyan-400 hover:from-cyan-600/30 hover:to-blue-600/30'
+                        } text-sm transition-colors`}
                       >
                         <Eye className="w-4 h-4" />
-                        View Image
+                        {image.views_remaining === 0 ? 'View Cover (No views left)' : 'View Image'}
                       </motion.button>
                     </div>
                   </motion.div>
@@ -459,6 +492,108 @@ function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, 
                   className="flex-1 px-4 py-3 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 text-white font-medium disabled:opacity-50"
                 >
                   Update
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Image Viewer Modal */}
+      <AnimatePresence>
+        {viewingImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop bg-black/80"
+            onClick={closeImageViewer}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-cyber-darker border border-cyan-500/30 rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-auto glow-cyan"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-display font-bold text-white">
+                  {viewedImagePath ? 'Viewing Image' : 'Access Denied - Cover Image'}
+                </h3>
+                <button
+                  onClick={closeImageViewer}
+                  className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+                >
+                  <X className="w-5 h-5 text-gray-400" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {/* Image display */}
+                <div className="relative rounded-lg overflow-hidden bg-black/50 flex items-center justify-center min-h-[300px]">
+                  {viewedImagePath ? (
+                    <img
+                      src={convertFileSrc(viewedImagePath)}
+                      alt={viewingImage.file_name}
+                      className="max-w-full max-h-[60vh] object-contain"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center p-8 text-center">
+                      <Lock className="w-16 h-16 text-red-400/50 mb-4" />
+                      <p className="text-red-400 font-medium mb-2">No Views Remaining</p>
+                      <p className="text-gray-500 text-sm">
+                        You have used all your views for this image.
+                      </p>
+                      {/* Show the carrier/cover image */}
+                      <div className="mt-4 p-4 rounded-lg bg-gradient-to-br from-gray-800/50 to-gray-900/50 border border-gray-700/30">
+                        <p className="text-gray-400 text-xs mb-2">Cover Image (Encrypted)</p>
+                        <img
+                          src={convertFileSrc(viewingImage.file_path)}
+                          alt="Cover"
+                          className="max-w-full max-h-[200px] object-contain opacity-50"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Image info */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 rounded-lg bg-white/5 border border-cyan-900/20">
+                    <p className="text-xs text-gray-400">File Name</p>
+                    <p className="text-white font-medium truncate">{viewingImage.file_name}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-cyan-900/20">
+                    <p className="text-xs text-gray-400">From</p>
+                    <p className="text-white font-medium">{viewingImage.from_owner}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-cyan-900/20">
+                    <p className="text-xs text-gray-400">Views Remaining</p>
+                    <p className={`font-medium ${viewingImage.views_remaining > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
+                      {viewingImage.views_remaining} views
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-cyan-900/20">
+                    <p className="text-xs text-gray-400">Received</p>
+                    <p className="text-white font-medium">{viewingImage.received_at}</p>
+                  </div>
+                </div>
+
+                {viewedImagePath && (
+                  <p className="text-center text-yellow-400 text-sm">
+                    ⚠️ This view has been counted. You have {viewingImage.views_remaining} views remaining.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex justify-end mt-6">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={closeImageViewer}
+                  className="px-6 py-3 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-medium"
+                >
+                  Close
                 </motion.button>
               </div>
             </motion.div>
