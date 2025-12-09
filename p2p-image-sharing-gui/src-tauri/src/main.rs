@@ -229,14 +229,68 @@ async fn go_online(
         });
     }
     
-    // Scan images directory
+    // Setup directory structure
     let images_path = PathBuf::from(&images_dir);
+    let encrypted_dir = images_path.join("encrypted");
+    let received_dir = images_path.join("received");
+
+    // Create subdirectories if they don't exist
+    let _ = fs::create_dir_all(&encrypted_dir);
+    let _ = fs::create_dir_all(&received_dir);
+
     let mut shared_images: Vec<ImageInfo> = Vec::new();
     let mut local_images_list: Vec<LocalImage> = Vec::new();
-    
+
     // Get access to the image store
     let image_store = state.image_store.clone();
-    
+
+    // Scan ONLY the encrypted folder for images to share with peers
+    if encrypted_dir.exists() && encrypted_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&encrypted_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
+                        if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
+                            let file_name = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let image_id = file_name.clone();
+                            let file_size = fs::metadata(&path)
+                                .map(|m| m.len() / 1024)
+                                .unwrap_or(0);
+
+                            // These are encrypted images - share them with peers (NO thumbnail)
+                            shared_images.push(ImageInfo {
+                                image_id: image_id.clone(),
+                                image_name: file_name.clone(),
+                                thumbnail_path: None, // No thumbnail for encrypted images
+                            });
+
+                            // Add to image store
+                            let metadata = ImageMetadata {
+                                image_id: image_id.clone(),
+                                image_name: file_name.clone(),
+                                owner: username.clone(),
+                                description: Some(format!("Encrypted image from {}", username)),
+                                file_size_kb: file_size,
+                            };
+
+                            image_store.write().await.add_image(
+                                image_id,
+                                path.clone(),
+                                metadata,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan the main directory for ALL images (for local display only, not shared)
     if images_path.exists() && images_path.is_dir() {
         if let Ok(entries) = fs::read_dir(&images_path) {
             for entry in entries.flatten() {
@@ -253,8 +307,8 @@ async fn go_online(
                             let file_size = fs::metadata(&path)
                                 .map(|m| m.len() / 1024)
                                 .unwrap_or(0);
-                            
-                            // Check if encrypted by trying to decode LSB
+
+                            // Check if encrypted
                             let is_encrypted = if let Ok(data) = fs::read(&path) {
                                 if let Ok(img) = image::load_from_memory(&data) {
                                     lsb::decode(&img).ok().flatten().is_some()
@@ -265,19 +319,6 @@ async fn go_online(
                                 false
                             };
 
-                            // Generate blurred thumbnail ONLY for unencrypted images
-                            let thumbnail_path = if !is_encrypted {
-                                create_blurred_thumbnail(&path, 15.0).ok()
-                            } else {
-                                None
-                            };
-
-                            shared_images.push(ImageInfo {
-                                image_id: image_id.clone(),
-                                image_name: file_name.clone(),
-                                thumbnail_path,
-                            });
-                            
                             local_images_list.push(LocalImage {
                                 image_id: image_id.clone(),
                                 file_path: path.to_string_lossy().to_string(),
@@ -285,21 +326,38 @@ async fn go_online(
                                 file_size_kb: file_size,
                                 is_encrypted,
                             });
-                            
-                            // Add to image store
-                            let metadata = ImageMetadata {
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Also scan encrypted folder and add to local images list
+    if encrypted_dir.exists() && encrypted_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&encrypted_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
+                        if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
+                            let file_name = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let image_id = file_name.clone();
+                            let file_size = fs::metadata(&path)
+                                .map(|m| m.len() / 1024)
+                                .unwrap_or(0);
+
+                            local_images_list.push(LocalImage {
                                 image_id: image_id.clone(),
-                                image_name: file_name.clone(),
-                                owner: username.clone(),
-                                description: Some(format!("Image from {}", username)),
+                                file_path: path.to_string_lossy().to_string(),
+                                file_name: file_name.clone(),
                                 file_size_kb: file_size,
-                            };
-                            
-                            image_store.write().await.add_image(
-                                image_id,
-                                path.clone(),
-                                metadata,
-                            );
+                                is_encrypted: true,
+                            });
                         }
                     }
                 }
@@ -989,9 +1047,63 @@ async fn refresh_images(
     let user = username.clone().unwrap_or_else(|| "unknown".to_string());
     let image_store = state.image_store.clone();
 
+    let encrypted_dir = images_path.join("encrypted");
+    let received_dir = images_path.join("received");
+
+    // Ensure subdirectories exist
+    let _ = fs::create_dir_all(&encrypted_dir);
+    let _ = fs::create_dir_all(&received_dir);
+
     let mut local_images_list: Vec<LocalImage> = Vec::new();
     let mut shared_images: Vec<ImageInfo> = Vec::new();
 
+    // Scan ONLY the encrypted folder for images to share with peers
+    if encrypted_dir.exists() && encrypted_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&encrypted_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
+                        if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
+                            let file_name = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let image_id = file_name.clone();
+                            let file_size = fs::metadata(&path)
+                                .map(|m| m.len() / 1024)
+                                .unwrap_or(0);
+
+                            // Add encrypted image to shared list (NO thumbnail)
+                            shared_images.push(ImageInfo {
+                                image_id: image_id.clone(),
+                                image_name: file_name.clone(),
+                                thumbnail_path: None,
+                            });
+
+                            // Add to image store
+                            let metadata = ImageMetadata {
+                                image_id: image_id.clone(),
+                                image_name: file_name.clone(),
+                                owner: user.clone(),
+                                description: Some(format!("Encrypted image from {}", user)),
+                                file_size_kb: file_size,
+                            };
+
+                            image_store.write().await.add_image(
+                                image_id,
+                                path.clone(),
+                                metadata,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan main directory for original images (for local display only)
     if images_path.exists() && images_path.is_dir() {
         if let Ok(entries) = fs::read_dir(&images_path) {
             for entry in entries.flatten() {
@@ -1009,53 +1121,45 @@ async fn refresh_images(
                                 .map(|m| m.len() / 1024)
                                 .unwrap_or(0);
 
-                            // Check if encrypted by trying to decode LSB
-                            let is_encrypted = if let Ok(data) = fs::read(&path) {
-                                if let Ok(img) = image::load_from_memory(&data) {
-                                    lsb::decode(&img).ok().flatten().is_some()
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            };
-
-                            // Generate blurred thumbnail ONLY for unencrypted images
-                            let thumbnail_path = if !is_encrypted {
-                                create_blurred_thumbnail(&path, 15.0).ok()
-                            } else {
-                                None
-                            };
-
-                            // Add to shared images list
-                            shared_images.push(ImageInfo {
+                            local_images_list.push(LocalImage {
                                 image_id: image_id.clone(),
-                                image_name: file_name.clone(),
-                                thumbnail_path,
+                                file_path: path.to_string_lossy().to_string(),
+                                file_name: file_name.clone(),
+                                file_size_kb: file_size,
+                                is_encrypted: false,
                             });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Also add encrypted images to local list
+    if encrypted_dir.exists() && encrypted_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&encrypted_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
+                        if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
+                            let file_name = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let image_id = file_name.clone();
+                            let file_size = fs::metadata(&path)
+                                .map(|m| m.len() / 1024)
+                                .unwrap_or(0);
 
                             local_images_list.push(LocalImage {
                                 image_id: image_id.clone(),
                                 file_path: path.to_string_lossy().to_string(),
                                 file_name: file_name.clone(),
                                 file_size_kb: file_size,
-                                is_encrypted,
+                                is_encrypted: true,
                             });
-
-                            // Add to image store if not already there
-                            let metadata = ImageMetadata {
-                                image_id: image_id.clone(),
-                                image_name: file_name.clone(),
-                                owner: user.clone(),
-                                description: Some(format!("Image from {}", user)),
-                                file_size_kb: file_size,
-                            };
-
-                            image_store.write().await.add_image(
-                                image_id,
-                                path.clone(),
-                                metadata,
-                            );
                         }
                     }
                 }
@@ -1123,15 +1227,24 @@ async fn encrypt_image(
         .map(|s| s.trim().to_string())
         .collect();
     
+    // Get the images directory and encrypted subfolder
+    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
+    let encrypted_dir = images_directory
+        .ok_or("Not online. Please go online first.")?
+        .join("encrypted");
+
+    // Ensure encrypted directory exists
+    fs::create_dir_all(&encrypted_dir).map_err(|e| e.to_string())?;
+
     // Try each server
     for server in &servers {
         match send_encryption_request(server, &meta_bytes, &img_data) {
             Ok(encrypted_data) => {
-                // Save encrypted image next to original
+                // Save encrypted image to the encrypted/ folder
                 let original_path = PathBuf::from(&image_path);
-                let output_path = original_path.with_file_name(
-                    format!("encrypted_{}", original_path.file_name().unwrap_or_default().to_string_lossy())
-                );
+                let file_name = original_path.file_name().unwrap_or_default().to_string_lossy();
+                let output_path = encrypted_dir.join(format!("encrypted_{}", file_name));
+
                 fs::write(&output_path, &encrypted_data).map_err(|e| e.to_string())?;
                 
                 let file_name = output_path.file_name().unwrap_or_default().to_string_lossy().to_string();
