@@ -666,8 +666,9 @@ async fn respond_to_request(
                 // If accepted, grant permissions and deliver image
                 if let Some(req) = request {
                     if let Some(own_addr) = p2p_address {
-                        // Fetch the image from our P2P server
-                        match request_image_from_peer(&own_addr, &username, &req.image_id, req.requested_views).await {
+                        // Fetch the image from our P2P server with the REQUESTING user's name
+                        // so the quota gets embedded for them, not the owner
+                        match request_image_from_peer(&own_addr, &req.from_user, &req.image_id, req.requested_views).await {
                             Ok(encrypted_image) => {
                                 // Try to deliver to the requester
                                 let query_msg = DirectoryMessage::QueryUser {
@@ -1153,9 +1154,17 @@ async fn refresh_images(
                                                 .unwrap_or("unknown")
                                                 .to_string();
 
+                                            // DEBUG: Log the permissions for troubleshooting
+                                            println!("[DEBUG] Received image: {}", file_name);
+                                            println!("[DEBUG] Owner: {}", permissions.owner);
+                                            println!("[DEBUG] Quotas: {:?}", permissions.quotas);
+                                            println!("[DEBUG] Current user: {:?}", username);
+
                                             // Get views remaining for current user
                                             let views_remaining = if let Some(current_user) = &username {
-                                                permissions.quotas.get(current_user).copied().unwrap_or(0)
+                                                let views = permissions.quotas.get(current_user).copied().unwrap_or(0);
+                                                println!("[DEBUG] Views for '{}': {}", current_user, views);
+                                                views
                                             } else {
                                                 0
                                             };

@@ -551,6 +551,7 @@ async fn handle_image_request(
             }
             Some(current_quota) => {
                 // User already has access — enforce owner's quota and update it atomically.
+                println!("[DEBUG] Existing user {} has quota: {}", requesting_user, current_quota);
                 if requested_views > current_quota {
                     info!("Denied {} - requested {} but only {} remaining", requesting_user, requested_views, current_quota);
                     return P2PMessage::ImageResponse {
@@ -568,6 +569,7 @@ async fn handle_image_request(
                     .insert(requesting_user.to_string(), new_quota);
 
                 info!("Granting {} views to {} (remaining: {})", requested_views, requesting_user, new_quota);
+                println!("[DEBUG] After decrement, quota for '{}': {}", requesting_user, new_quota);
             }
             None => {
                 // New user - grant requested access
@@ -577,12 +579,17 @@ async fn handle_image_request(
                     .insert(requesting_user.to_string(), requested_views);
 
                 info!("Granted {} views to {} for image {}", requested_views, requesting_user, image_id);
+                println!("[DEBUG] New user quota - inserted {} views for '{}' in quotas", requested_views, requesting_user);
+                println!("[DEBUG] Updated quotas after insert: {:?}", combined_data.permissions.quotas);
             }
         }
     } else {
         // Owner has unlimited access - don't modify quotas
         info!("Owner {} accessing their own image - unlimited access", requesting_user);
     }
+
+    // DEBUG: Log the final quotas before re-encoding
+    println!("[DEBUG] Final quotas before re-encoding: {:?}", combined_data.permissions.quotas);
 
     // Re-serialize and re-encode
     let updated_payload = match bincode::serialize(&combined_data) {
