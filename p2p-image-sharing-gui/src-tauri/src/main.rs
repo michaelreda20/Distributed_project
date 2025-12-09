@@ -14,7 +14,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 use tauri::State;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex as TokioMutex};
+use tokio::sync::mpsc;
 
 // Import from your main project
 use cloud_p2p_project::directory_service::{
@@ -42,6 +43,7 @@ pub struct AppState {
     pub image_store: Arc<RwLock<PeerImageStore>>,
     pub p2p_address: Mutex<Option<String>>,
     pub heartbeat_failures: Mutex<u32>,  // Track consecutive heartbeat failures
+    pub heartbeat_shutdown: TokioMutex<Option<mpsc::Sender<()>>>,  // Channel to stop heartbeat task (using Tokio's async Mutex)
 }
 
 impl Default for AppState {
@@ -61,6 +63,7 @@ impl Default for AppState {
             image_store: Arc::new(RwLock::new(PeerImageStore::new())),
             p2p_address: Mutex::new(None),
             heartbeat_failures: Mutex::new(0),
+            heartbeat_shutdown: TokioMutex::new(None),
         }
     }
 }
@@ -308,19 +311,30 @@ async fn go_online(
                     }
                 });
                 
-                // Start heartbeat task
+                // Start heartbeat task with shutdown channel
                 let heartbeat_username = username.clone();
                 let heartbeat_servers = dir_servers.clone();
+                let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+
+                // Store the shutdown sender in state so we can cancel the heartbeat task
+                *state.heartbeat_shutdown.lock().await = Some(shutdown_tx);
+
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(10)).await;
-                        
-                        let heartbeat_msg = DirectoryMessage::Heartbeat {
-                            username: heartbeat_username.clone(),
-                        };
-                        
-                        if let Err(e) = multicast_directory_message(&heartbeat_servers, heartbeat_msg).await {
-                            eprintln!("Heartbeat failed: {}", e);
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                                let heartbeat_msg = DirectoryMessage::Heartbeat {
+                                    username: heartbeat_username.clone(),
+                                };
+
+                                if let Err(e) = multicast_directory_message(&heartbeat_servers, heartbeat_msg).await {
+                                    eprintln!("Heartbeat failed: {}", e);
+                                }
+                            }
+                            _ = shutdown_rx.recv() => {
+                                eprintln!("Heartbeat task shutting down");
+                                break;
+                            }
                         }
                     }
                 });
@@ -357,19 +371,27 @@ async fn go_offline(
 ) -> Result<ApiResponse<()>, String> {
     let username = state.username.lock().map_err(|e| e.to_string())?.clone();
     let dir_servers = state.directory_servers.lock().map_err(|e| e.to_string())?.clone();
-    
+
+    // CRITICAL FIX: Stop the heartbeat task FIRST before unregistering
+    // This prevents the heartbeat from re-registering the user after we unregister
+    if let Some(sender) = state.heartbeat_shutdown.lock().await.take() {
+        // Send shutdown signal - this will stop the heartbeat loop
+        let _ = sender.send(()).await;
+        eprintln!("Sent shutdown signal to heartbeat task");
+    }
+
     if let Some(user) = username {
         let unregister_msg = DirectoryMessage::Unregister {
             username: user,
         };
-        
+
         let _ = multicast_directory_message(&dir_servers, unregister_msg).await;
     }
-    
+
     *state.is_online.lock().map_err(|e| e.to_string())? = false;
     *state.username.lock().map_err(|e| e.to_string())? = None;
     *state.p2p_port.lock().map_err(|e| e.to_string())? = None;
-    
+
     Ok(ApiResponse {
         success: true,
         message: "Went offline successfully".to_string(),
