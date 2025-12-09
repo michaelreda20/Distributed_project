@@ -6,7 +6,7 @@ import {
   RefreshCw, Shield, WifiOff
 } from 'lucide-react';
 
-function ImagesPanel({ localImages, receivedImages, onEncrypt, onUpdatePermissions, onRefresh, loading, isOnline }) {
+function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, onUpdatePermissions, onRefresh, loading, isOnline }) {
   const [activeTab, setActiveTab] = useState('local');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
@@ -19,6 +19,10 @@ function ImagesPanel({ localImages, receivedImages, onEncrypt, onUpdatePermissio
   );
 
   const filteredReceivedImages = receivedImages.filter(img =>
+    img.file_name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredEncryptedImages = encryptedImages.filter(img =>
     img.file_name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -75,6 +79,28 @@ function ImagesPanel({ localImages, receivedImages, onEncrypt, onUpdatePermissio
             </span>
           </div>
           {activeTab === 'local' && (
+            <motion.div
+              layoutId="imageTab"
+              className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-500 to-pink-500"
+            />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('encrypted')}
+          className={`px-4 py-3 text-sm font-medium transition-colors relative ${
+            activeTab === 'encrypted'
+              ? 'text-white'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4" />
+            Encrypted Images
+            <span className="px-2 py-0.5 text-xs rounded-full bg-green-600/20 text-green-400">
+              {encryptedImages.length}
+            </span>
+          </div>
+          {activeTab === 'encrypted' && (
             <motion.div
               layoutId="imageTab"
               className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-500 to-pink-500"
@@ -214,6 +240,66 @@ function ImagesPanel({ localImages, receivedImages, onEncrypt, onUpdatePermissio
                             Encrypt
                           </motion.button>
                         )}
+                        <motion.button
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={() => setPermissionModal(image)}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-400 text-sm hover:bg-cyan-600/30 transition-colors"
+                        >
+                          <Edit className="w-4 h-4" />
+                          Permissions
+                        </motion.button>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        ) : activeTab === 'encrypted' ? (
+          <motion.div
+            key="encrypted"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+          >
+            {filteredEncryptedImages.length === 0 ? (
+              <div className="text-center py-16">
+                <Lock className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-white mb-2">No encrypted images</h3>
+                <p className="text-gray-400">
+                  {searchTerm ? 'No images match your search' : 'Encrypted images will appear here'}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredEncryptedImages.map((image, index) => (
+                  <motion.div
+                    key={image.image_id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.05 }}
+                    className="cyber-card rounded-xl bg-cyber-darker/80 backdrop-blur-sm overflow-hidden"
+                  >
+                    {/* Image preview placeholder */}
+                    <div className="h-40 bg-gradient-to-br from-green-900/40 to-emerald-900/40 flex items-center justify-center">
+                      <Shield className="w-16 h-16 text-green-400/50" />
+                    </div>
+
+                    <div className="p-4">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <h3 className="font-medium text-white truncate" title={image.file_name}>
+                            {image.file_name}
+                          </h3>
+                          <p className="text-sm text-gray-400">{image.file_size_kb} KB</p>
+                        </div>
+                        <div className="p-1.5 rounded-lg bg-green-600/20">
+                          <Lock className="w-4 h-4 text-green-400" />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 mt-4">
                         <motion.button
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}

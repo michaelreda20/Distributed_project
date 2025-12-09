@@ -39,6 +39,7 @@ function App() {
   // Data state
   const [peers, setPeers] = useState([]);
   const [localImages, setLocalImages] = useState([]);
+  const [encryptedImages, setEncryptedImages] = useState([]);
   const [receivedImages, setReceivedImages] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -149,7 +150,8 @@ function App() {
           fetchPeers(),
           fetchPendingRequests(),
           fetchNotifications(),
-          fetchReceivedImages()
+          fetchReceivedImages(),
+          fetchEncryptedImages()
         ]);
       } else {
         showToast(response.message, 'error');
@@ -226,6 +228,18 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to fetch received images:', error);
+    }
+  };
+
+  const fetchEncryptedImages = async () => {
+    try {
+      const response = await invoke('get_encrypted_images');
+      console.log('Encrypted images response:', response);
+      if (response.success) {
+        setEncryptedImages(response.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch encrypted images:', error);
     }
   };
 
@@ -312,8 +326,9 @@ function App() {
       } else {
         showToast(response.message, 'error');
       }
-      // Also fetch received images
+      // Also fetch received and encrypted images
       await fetchReceivedImages();
+      await fetchEncryptedImages();
     } catch (error) {
       showToast(`Failed to refresh images: ${error}`, 'error');
     }
@@ -350,6 +365,7 @@ function App() {
         return (
           <ImagesPanel
             localImages={localImages}
+            encryptedImages={encryptedImages}
             receivedImages={receivedImages}
             onEncrypt={handleEncryptImage}
             onUpdatePermissions={handleUpdatePermissions}
