@@ -1701,11 +1701,11 @@ async fn handle_respond_request(
 
                         let encrypted_image = match send_directory_or_multicast(directory_addr, self_query).await {
                             Ok(DirectoryMessage::QueryUserResponse { user: Some(self_user) }) => {
-                                // Fetch the image from our own P2P server AS THE OWNER
-                                // (so quota doesn't get decremented)
+                                // Fetch the image from our own P2P server WITH THE REQUESTING USER'S NAME
+                                // so the quota gets embedded for them, not the owner
                                 match request_image_from_peer(
                                     &self_user.p2p_address,
-                                    owner,  // Request as owner, not as the requester
+                                    &req.from_user,  // Request as the requester (Alice), not as owner (Bob)
                                     &req.image_id,
                                     req.requested_views,
                                 )

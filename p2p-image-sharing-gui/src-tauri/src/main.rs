@@ -813,8 +813,8 @@ async fn update_permissions(
     
     match send_p2p_message(&p2p_address, update_msg).await {
         Ok(P2PMessage::UpdatePermissionsResponse { success: true, message }) => {
-            // Fetch the updated image to deliver
-            if let Ok(encrypted_image) = request_image_from_peer(&p2p_address, &username, &image_id, new_quota).await {
+            // Fetch the updated image to deliver (fetch as target_user so quota is embedded for them)
+            if let Ok(encrypted_image) = request_image_from_peer(&p2p_address, &target_user, &image_id, new_quota).await {
                 // Check if target user is online
                 let query_msg = DirectoryMessage::QueryUser {
                     username: target_user.clone(),
@@ -888,11 +888,73 @@ async fn get_local_images(
     state: State<'_, AppState>,
 ) -> Result<ApiResponse<Vec<LocalImage>>, String> {
     let images = state.local_images.lock().map_err(|e| e.to_string())?.clone();
-    
+
     Ok(ApiResponse {
         success: true,
         message: format!("Found {} local images", images.len()),
         data: Some(images),
+    })
+}
+
+#[tauri::command]
+async fn get_encrypted_images(
+    state: State<'_, AppState>,
+) -> Result<ApiResponse<Vec<LocalImage>>, String> {
+    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
+
+    let mut encrypted_list: Vec<LocalImage> = Vec::new();
+
+    // Get the encrypted directory from the user's images directory
+    let encrypted_dir = match images_directory {
+        Some(images_path) => images_path.join("encrypted"),
+        None => {
+            return Ok(ApiResponse {
+                success: true,
+                message: "Not connected - no images directory configured".to_string(),
+                data: Some(encrypted_list),
+            });
+        }
+    };
+
+    eprintln!("Scanning encrypted directory: {:?}", encrypted_dir);
+
+    if encrypted_dir.exists() && encrypted_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&encrypted_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(ext) = path.extension() {
+                        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
+                        if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
+                            let file_name = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let image_id = file_name.clone();
+                            let file_size = fs::metadata(&path)
+                                .map(|m| m.len() / 1024)
+                                .unwrap_or(0);
+
+                            encrypted_list.push(LocalImage {
+                                image_id: image_id.clone(),
+                                file_path: path.to_string_lossy().to_string(),
+                                file_name: file_name.clone(),
+                                file_size_kb: file_size,
+                                is_encrypted: true,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("Total encrypted images found: {}", encrypted_list.len());
+
+    Ok(ApiResponse {
+        success: true,
+        message: format!("Found {} encrypted images", encrypted_list.len()),
+        data: Some(encrypted_list),
     })
 }
 
@@ -1618,6 +1680,7 @@ fn main() {
             get_notifications,
             update_permissions,
             get_local_images,
+            get_encrypted_images,
             get_received_images,
             refresh_images,
             encrypt_image,
