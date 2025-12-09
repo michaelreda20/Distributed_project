@@ -439,13 +439,14 @@ async fn discover_peers(
     let username = state.username.lock().map_err(|e| e.to_string())?.clone()
         .ok_or("Not logged in")?;
     let dir_servers = state.directory_servers.lock().map_err(|e| e.to_string())?.clone();
-    
-    let query_msg = DirectoryMessage::QueryPeers {
+
+    // Use QueryAllPeers to get both online and offline users
+    let query_msg = DirectoryMessage::QueryAllPeers {
         requesting_user: username,
     };
-    
+
     match multicast_directory_message(&dir_servers, query_msg).await {
-        Ok(DirectoryMessage::QueryPeersResponse { peers }) => {
+        Ok(DirectoryMessage::QueryAllPeersResponse { peers }) => {
             let peer_infos: Vec<PeerInfo> = peers.iter().map(|p| PeerInfo {
                 username: p.username.clone(),
                 p2p_address: p.p2p_address.clone(),
@@ -456,7 +457,7 @@ async fn discover_peers(
                     thumbnail_path: img.thumbnail_path.clone(),
                 }).collect(),
             }).collect();
-            
+
             Ok(ApiResponse {
                 success: true,
                 message: format!("Found {} peers", peer_infos.len()),

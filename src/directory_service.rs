@@ -101,6 +101,13 @@ pub enum DirectoryMessage {
     QueryPeersResponse {
         peers: Vec<UserEntry>,
     },
+    /// Query ALL peers (both online and offline)
+    QueryAllPeers {
+        requesting_user: String,
+    },
+    QueryAllPeersResponse {
+        peers: Vec<UserEntry>,
+    },
     UpdateSharedImages {
         username: String,
         shared_images: Vec<ImageInfo>,
@@ -403,7 +410,7 @@ impl DirectoryServiceState {
     
     pub async fn get_online_peers(&self, requesting_user: &str) -> Vec<UserEntry> {
         let users = self.users.read().await;
-        
+
         users
             .values()
             .filter(|u| {
@@ -411,6 +418,17 @@ impl DirectoryServiceState {
                     && u.status == UserStatus::Online
                     && self.is_user_active(u)
             })
+            .cloned()
+            .collect()
+    }
+
+    /// Get ALL registered peers (both online and offline), excluding the requesting user
+    pub async fn get_all_peers(&self, requesting_user: &str) -> Vec<UserEntry> {
+        let users = self.users.read().await;
+
+        users
+            .values()
+            .filter(|u| u.username != requesting_user)
             .cloned()
             .collect()
     }
@@ -793,6 +811,10 @@ async fn handle_directory_client(
         DirectoryMessage::QueryPeers { requesting_user } => {
             let peers = state.get_online_peers(&requesting_user).await;
             DirectoryMessage::QueryPeersResponse { peers }
+        }
+        DirectoryMessage::QueryAllPeers { requesting_user } => {
+            let peers = state.get_all_peers(&requesting_user).await;
+            DirectoryMessage::QueryAllPeersResponse { peers }
         }
         DirectoryMessage::UpdateSharedImages {
             username,
