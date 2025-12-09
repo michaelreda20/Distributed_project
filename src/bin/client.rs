@@ -467,6 +467,10 @@ fn handle_encrypt(input_path: &PathBuf, owner: &String) -> Result<()> {
             fs::write(ENCRYPTED_OUTPUT_IMAGE, &encrypted_image)?;
             println!("Saved encrypted image to '{}'", ENCRYPTED_OUTPUT_IMAGE);
             
+            println!("\n💡 NOTE: If you're running a P2P server (online mode), you need to");
+            println!("   restart it for this new image to be shareable with peers.");
+            println!("   Press Ctrl+C and run: cargo run --bin client -- online -u {} -p <port>", owner);
+            
             return Ok(());
         }
 
@@ -679,7 +683,7 @@ async fn handle_start_peer(
     let mut shared_images = Vec::new();
     
     if images_dir.exists() && images_dir.is_dir() {
-        for entry in fs::read_dir(images_dir)? {
+        for entry in fs::read_dir(&images_dir)? {
             let entry = entry?;
             let path = entry.path();
             
@@ -954,8 +958,64 @@ async fn handle_start_peer(
         }
     });
     
+    // Start background task to periodically scan for new images
+    let rescan_store = image_store.clone();
+    let rescan_username = username.to_string();
+    let rescan_dir = images_dir.clone();
+    tokio::spawn(async move {
+        loop {
+            // Scan every 5 seconds for new images
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            
+            if let Ok(entries) = fs::read_dir(&rescan_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(ext) = path.extension() {
+                            if ext == "png" || ext == "jpg" || ext == "jpeg" {
+                                let file_name = path.file_name().unwrap().to_str().unwrap();
+                                let image_id = file_name.to_string();
+                                
+                                // Check if already in store
+                                let already_exists = {
+                                    let store = rescan_store.read().await;
+                                    store.get_image_path(&image_id).is_some()
+                                };
+                                
+                                if !already_exists {
+                                    // New image found - add to store!
+                                    let file_size_kb = fs::metadata(&path)
+                                        .map(|m| m.len() / 1024)
+                                        .unwrap_or(0);
+                                    
+                                    let metadata = ImageMetadata {
+                                        image_id: image_id.clone(),
+                                        image_name: file_name.to_string(),
+                                        owner: rescan_username.clone(),
+                                        description: Some(format!("Image from {}", rescan_username)),
+                                        file_size_kb,
+                                    };
+                                    
+                                    rescan_store.write().await.add_image(
+                                        image_id.clone(),
+                                        path.clone(),
+                                        metadata,
+                                    );
+                                    
+                                    println!("\n📷 [AUTO-DETECT] New image found: '{}'", image_id);
+                                    println!("   ✓ Added to shareable images automatically!");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    
     // Start P2P server
     println!("✓ Starting P2P server on port {}...", port);
+    println!("📷 Auto-scanning for new images in: {}", images_dir.display());
     println!("Press Ctrl+C to stop");
     
     start_p2p_server(port, username.to_string(), image_store).await?;

@@ -100,13 +100,26 @@ pub struct ImageMetadata {
 pub struct PeerImageStore {
     /// Map of image_id -> (file_path, metadata)
     images: HashMap<String, (PathBuf, ImageMetadata)>,
+    /// Directory where received images should be saved
+    received_images_dir: Option<PathBuf>,
 }
 
 impl PeerImageStore {
     pub fn new() -> Self {
         Self {
             images: HashMap::new(),
+            received_images_dir: None,
         }
+    }
+    
+    /// Set the directory where received images should be saved
+    pub fn set_received_images_dir(&mut self, dir: PathBuf) {
+        self.received_images_dir = Some(dir);
+    }
+    
+    /// Get the directory where received images should be saved
+    pub fn get_received_images_dir(&self) -> Option<&PathBuf> {
+        self.received_images_dir.as_ref()
     }
     
     /// Add an image to the store
@@ -305,8 +318,17 @@ async fn handle_p2p_request(
             println!("👁  Views granted: {}", requested_views);
             println!("========================================\n");
 
-            // Save the image to the current directory with naming: from_{owner}_{requester}.png
-            let save_path = PathBuf::from(format!("from_{}_{}.png", from_owner, owner_username));
+            // Generate filename: from_{owner}_{image_id}
+            let file_name = format!("from_{}_{}", from_owner, image_id);
+            
+            // Determine save path - use received_images_dir if set, otherwise current directory
+            let save_path = {
+                let store = image_store.read().await;
+                match store.get_received_images_dir() {
+                    Some(dir) => dir.join(&file_name),
+                    None => PathBuf::from(&file_name),
+                }
+            };
 
             match fs::write(&save_path, &encrypted_image) {
                 Ok(_) => {
@@ -361,8 +383,15 @@ async fn handle_p2p_request(
                     message: format!("Permission update is for user '{}', not '{}'", for_user, owner_username),
                 }
             } else {
-                // Find the local image file: from_{owner}_{requester}.png in current directory
-                let local_image_path = PathBuf::from(format!("from_{}_{}.png", from_owner, owner_username));
+                // Find the local image file: from_{owner}_{image_id} in received_images_dir or current directory
+                let file_name = format!("from_{}_{}", from_owner, image_id);
+                let local_image_path = {
+                    let store = image_store.read().await;
+                    match store.get_received_images_dir() {
+                        Some(dir) => dir.join(&file_name),
+                        None => PathBuf::from(&file_name),
+                    }
+                };
 
                 if !local_image_path.exists() {
                     println!("❌ Local image not found: {}", local_image_path.display());

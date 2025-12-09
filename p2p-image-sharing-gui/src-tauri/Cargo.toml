@@ -1,0 +1,30 @@
+[package]
+name = "p2p-image-sharing"
+version = "1.0.0"
+description = "P2P Image Sharing Desktop Application"
+authors = ["Fredd"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.21"
+bincode = "1.3"
+image = "0.24.7"
+
+# Reference the main project library
+cloud_p2p_project = { path = "../../" }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
