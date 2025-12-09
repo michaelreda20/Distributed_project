@@ -27,6 +27,7 @@ use cloud_p2p_project::p2p_protocol::{
     list_peer_images, request_image_from_peer, start_p2p_server,
 };
 use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions, get_local_ip};
+use image::imageops;
 
 // ============================================================================
 // APP STATE
@@ -138,6 +139,30 @@ pub struct NotificationInfo {
 // NETWORK HELPERS
 // ============================================================================
 
+/// Create a blurred thumbnail from an image
+fn create_blurred_thumbnail(img_path: &PathBuf, blur_sigma: f32) -> Result<String> {
+    // Load the image
+    let img = image::open(img_path)?;
+
+    // Resize to thumbnail size (200x200) for faster loading
+    let thumbnail = img.resize(200, 200, imageops::FilterType::Lanczos3);
+
+    // Apply Gaussian blur
+    let blurred = imageops::blur(&thumbnail, blur_sigma);
+
+    // Create a temp file path for the thumbnail
+    let file_name = img_path.file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("thumbnail");
+    let temp_dir = std::env::temp_dir();
+    let thumbnail_path = temp_dir.join(format!("{}_blurred.png", file_name));
+
+    // Save the blurred thumbnail
+    blurred.save(&thumbnail_path)?;
+
+    Ok(thumbnail_path.to_string_lossy().to_string())
+}
+
 async fn send_directory_message_async(addr: &str, message: DirectoryMessage) -> Result<DirectoryMessage> {
     send_directory_message(addr, message).await
 }
@@ -239,11 +264,18 @@ async fn go_online(
                             } else {
                                 false
                             };
-                            
+
+                            // Generate blurred thumbnail ONLY for unencrypted images
+                            let thumbnail_path = if !is_encrypted {
+                                create_blurred_thumbnail(&path, 15.0).ok()
+                            } else {
+                                None
+                            };
+
                             shared_images.push(ImageInfo {
                                 image_id: image_id.clone(),
                                 image_name: file_name.clone(),
-                                thumbnail_path: None,
+                                thumbnail_path,
                             });
                             
                             local_images_list.push(LocalImage {
@@ -837,12 +869,100 @@ async fn get_local_images(
 async fn get_received_images(
     state: State<'_, AppState>,
 ) -> Result<ApiResponse<Vec<ReceivedImage>>, String> {
-    let images = state.received_images.lock().map_err(|e| e.to_string())?.clone();
-    
+    // Scan the received images directory for encrypted images
+    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
+    let username = state.username.lock().map_err(|e| e.to_string())?.clone();
+
+    let mut received_list: Vec<ReceivedImage> = Vec::new();
+
+    if let Some(images_path) = images_directory {
+        let received_dir = images_path.join("received");
+        if received_dir.exists() && received_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&received_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(ext) = path.extension() {
+                            let ext_str = ext.to_str().unwrap_or("").to_lowercase();
+                            if ext_str == "png" || ext_str == "jpg" || ext_str == "jpeg" {
+                                // Try to read the image and check if it's encrypted
+                                if let Ok(data) = fs::read(&path) {
+                                    if let Ok(img) = image::load_from_memory(&data) {
+                                        if let Ok(Some(payload_bytes)) = lsb::decode(&img) {
+                                            // This is an encrypted image, decode the metadata
+                                            if let Ok(combined_data) = bincode::deserialize::<CombinedPayload>(&payload_bytes) {
+                                                let permissions = combined_data.permissions;
+                                                let file_name = path.file_name()
+                                                    .and_then(|n| n.to_str())
+                                                    .unwrap_or("unknown")
+                                                    .to_string();
+
+                                                // Get views remaining for current user
+                                                let views_remaining = if let Some(user) = &username {
+                                                    permissions.quotas.get(user).copied().unwrap_or(0)
+                                                } else {
+                                                    0
+                                                };
+
+                                                // Try to extract timestamp from file metadata
+                                                let received_at = match fs::metadata(&path)
+                                                    .and_then(|m| m.modified())
+                                                {
+                                                    Ok(modified_time) => {
+                                                        match modified_time.duration_since(SystemTime::UNIX_EPOCH) {
+                                                            Ok(d) => {
+                                                                let secs = d.as_secs();
+                                                                let now_secs = SystemTime::now()
+                                                                    .duration_since(SystemTime::UNIX_EPOCH)
+                                                                    .map(|n| n.as_secs())
+                                                                    .unwrap_or(0);
+                                                                let diff = now_secs.saturating_sub(secs);
+                                                                let mins = diff / 60;
+                                                                let hours = mins / 60;
+                                                                let days = hours / 24;
+                                                                if days > 0 {
+                                                                    format!("{} days ago", days)
+                                                                } else if hours > 0 {
+                                                                    format!("{} hours ago", hours)
+                                                                } else if mins > 0 {
+                                                                    format!("{} mins ago", mins)
+                                                                } else {
+                                                                    "Just now".to_string()
+                                                                }
+                                                            }
+                                                            Err(_) => "Unknown".to_string()
+                                                        }
+                                                    }
+                                                    Err(_) => "Unknown".to_string()
+                                                };
+
+                                                received_list.push(ReceivedImage {
+                                                    image_id: file_name.clone(),
+                                                    from_owner: permissions.owner,
+                                                    file_path: path.to_string_lossy().to_string(),
+                                                    file_name,
+                                                    views_remaining,
+                                                    received_at,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Update state
+    *state.received_images.lock().map_err(|e| e.to_string())? = received_list.clone();
+
     Ok(ApiResponse {
         success: true,
-        message: format!("Found {} received images", images.len()),
-        data: Some(images),
+        message: format!("Found {} received images", received_list.len()),
+        data: Some(received_list),
     })
 }
 
@@ -852,7 +972,9 @@ async fn refresh_images(
 ) -> Result<ApiResponse<Vec<LocalImage>>, String> {
     let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
     let username = state.username.lock().map_err(|e| e.to_string())?.clone();
-    
+    let dir_servers = state.directory_servers.lock().map_err(|e| e.to_string())?.clone();
+    let is_online = *state.is_online.lock().map_err(|e| e.to_string())?;
+
     let images_path = match images_directory {
         Some(path) => path,
         None => {
@@ -863,12 +985,13 @@ async fn refresh_images(
             });
         }
     };
-    
-    let user = username.unwrap_or_else(|| "unknown".to_string());
+
+    let user = username.clone().unwrap_or_else(|| "unknown".to_string());
     let image_store = state.image_store.clone();
-    
+
     let mut local_images_list: Vec<LocalImage> = Vec::new();
-    
+    let mut shared_images: Vec<ImageInfo> = Vec::new();
+
     if images_path.exists() && images_path.is_dir() {
         if let Ok(entries) = fs::read_dir(&images_path) {
             for entry in entries.flatten() {
@@ -885,7 +1008,7 @@ async fn refresh_images(
                             let file_size = fs::metadata(&path)
                                 .map(|m| m.len() / 1024)
                                 .unwrap_or(0);
-                            
+
                             // Check if encrypted by trying to decode LSB
                             let is_encrypted = if let Ok(data) = fs::read(&path) {
                                 if let Ok(img) = image::load_from_memory(&data) {
@@ -896,7 +1019,21 @@ async fn refresh_images(
                             } else {
                                 false
                             };
-                            
+
+                            // Generate blurred thumbnail ONLY for unencrypted images
+                            let thumbnail_path = if !is_encrypted {
+                                create_blurred_thumbnail(&path, 15.0).ok()
+                            } else {
+                                None
+                            };
+
+                            // Add to shared images list
+                            shared_images.push(ImageInfo {
+                                image_id: image_id.clone(),
+                                image_name: file_name.clone(),
+                                thumbnail_path,
+                            });
+
                             local_images_list.push(LocalImage {
                                 image_id: image_id.clone(),
                                 file_path: path.to_string_lossy().to_string(),
@@ -904,7 +1041,7 @@ async fn refresh_images(
                                 file_size_kb: file_size,
                                 is_encrypted,
                             });
-                            
+
                             // Add to image store if not already there
                             let metadata = ImageMetadata {
                                 image_id: image_id.clone(),
@@ -913,7 +1050,7 @@ async fn refresh_images(
                                 description: Some(format!("Image from {}", user)),
                                 file_size_kb: file_size,
                             };
-                            
+
                             image_store.write().await.add_image(
                                 image_id,
                                 path.clone(),
@@ -925,10 +1062,32 @@ async fn refresh_images(
             }
         }
     }
-    
+
     // Update the local images in state
     *state.local_images.lock().map_err(|e| e.to_string())? = local_images_list.clone();
-    
+
+    // IMPORTANT: Update the directory service with the new shared images list
+    // This ensures other peers see the updated list when they query
+    if is_online && username.is_some() {
+        let update_msg = DirectoryMessage::UpdateSharedImages {
+            username: user.clone(),
+            shared_images,
+        };
+
+        // Try to update the directory service
+        match multicast_directory_message(&dir_servers, update_msg).await {
+            Ok(DirectoryMessage::UpdateResponse { success, message }) => {
+                eprintln!("Directory service update: {} - {}", success, message);
+            }
+            Ok(_) => {
+                eprintln!("Unexpected response from directory service");
+            }
+            Err(e) => {
+                eprintln!("Failed to update directory service: {}", e);
+            }
+        }
+    }
+
     Ok(ApiResponse {
         success: true,
         message: format!("Refreshed: Found {} images", local_images_list.len()),
