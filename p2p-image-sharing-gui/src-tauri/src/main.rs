@@ -24,7 +24,7 @@ use cloud_p2p_project::directory_service::{
 };
 use cloud_p2p_project::p2p_protocol::{
     ImageMetadata, PeerImageStore, P2PMessage, send_p2p_message,
-    list_peer_images, request_image_from_peer, start_p2p_server,
+    list_peer_images, request_image_from_peer, request_thumbnail_from_peer, start_p2p_server,
 };
 use cloud_p2p_project::{lsb, CombinedPayload, ImagePermissions, get_local_ip};
 use image::imageops;
@@ -1712,6 +1712,72 @@ async fn list_peer_images_cmd(
     }
 }
 
+#[tauri::command]
+async fn get_image_thumbnail(
+    state: State<'_, AppState>,
+    peer_username: String,
+    image_id: String,
+) -> Result<ApiResponse<String>, String> {
+    let username = state.username.lock().map_err(|e| e.to_string())?.clone()
+        .ok_or("Not logged in")?;
+    let dir_servers = state.directory_servers.lock().map_err(|e| e.to_string())?.clone();
+    
+    // Query directory to get peer's P2P address
+    let query_msg = DirectoryMessage::QueryUser {
+        username: peer_username.clone(),
+    };
+    
+    match multicast_directory_message(&dir_servers, query_msg).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(peer) }) => {
+            if peer.status != UserStatus::Online {
+                return Ok(ApiResponse {
+                    success: false,
+                    message: format!("Peer {} is not online", peer_username),
+                    data: None,
+                });
+            }
+            
+            // Request thumbnail from peer
+            match request_thumbnail_from_peer(&peer.p2p_address, &username, &image_id).await {
+                Ok(thumbnail_bytes) => {
+                    // Convert to base64 for easy transfer to frontend
+                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                    let base64_thumbnail = STANDARD.encode(&thumbnail_bytes);
+                    let data_url = format!("data:image/png;base64,{}", base64_thumbnail);
+                    
+                    Ok(ApiResponse {
+                        success: true,
+                        message: "Thumbnail retrieved".to_string(),
+                        data: Some(data_url),
+                    })
+                }
+                Err(e) => Ok(ApiResponse {
+                    success: false,
+                    message: format!("Failed to get thumbnail: {}", e),
+                    data: None,
+                }),
+            }
+        }
+        Ok(DirectoryMessage::QueryUserResponse { user: None }) => {
+            Ok(ApiResponse {
+                success: false,
+                message: format!("Peer {} not found", peer_username),
+                data: None,
+            })
+        }
+        Ok(_) => Ok(ApiResponse {
+            success: false,
+            message: "Unexpected response".to_string(),
+            data: None,
+        }),
+        Err(e) => Ok(ApiResponse {
+            success: false,
+            message: format!("Failed to query peer: {}", e),
+            data: None,
+        }),
+    }
+}
+
 // ============================================================================
 // PENDING PERMISSION UPDATES
 // ============================================================================
@@ -1840,6 +1906,7 @@ fn main() {
             view_image,
             send_heartbeat,
             list_peer_images_cmd,
+            get_image_thumbnail,
             check_pending_permission_updates,
         ])
         .run(tauri::generate_context!())
