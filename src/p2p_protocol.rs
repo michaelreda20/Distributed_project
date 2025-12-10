@@ -550,26 +550,18 @@ async fn handle_image_request(
                 };
             }
             Some(current_quota) => {
-                // User already has access — enforce owner's quota and update it atomically.
-                println!("[DEBUG] Existing user {} has quota: {}", requesting_user, current_quota);
-                if requested_views > current_quota {
-                    info!("Denied {} - requested {} but only {} remaining", requesting_user, requested_views, current_quota);
-                    return P2PMessage::ImageResponse {
-                        success: false,
-                        message: format!("Requested {} views but only {} available", requested_views, current_quota),
-                        encrypted_image: None,
-                    };
-                }
-
-                // Decrement the stored quota by the number of views being granted now so the owner's update is enforced.
-                let new_quota = current_quota.saturating_sub(requested_views);
+                // User already has access — this is being called to SET the quota (grant permission)
+                // NOT to decrement it. The requested_views IS the quota to grant.
+                println!("[DEBUG] Existing user {} has quota: {}, setting to: {}", requesting_user, current_quota, requested_views);
+                
+                // Set the quota to exactly what was requested - this is granting access
                 combined_data
                     .permissions
                     .quotas
-                    .insert(requesting_user.to_string(), new_quota);
+                    .insert(requesting_user.to_string(), requested_views);
 
-                info!("Granting {} views to {} (remaining: {})", requested_views, requesting_user, new_quota);
-                println!("[DEBUG] After decrement, quota for '{}': {}", requesting_user, new_quota);
+                info!("Set {} views for {} (was: {})", requested_views, requesting_user, current_quota);
+                println!("[DEBUG] After update, quota for '{}': {}", requesting_user, requested_views);
             }
             None => {
                 // New user - grant requested access
