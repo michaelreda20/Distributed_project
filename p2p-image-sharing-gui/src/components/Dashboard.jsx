@@ -8,7 +8,7 @@ import {
 const statCards = [
   {
     id: 'peers',
-    label: 'Online Peers',
+    label: 'Peers',
     icon: Users,
     color: 'cyan',
     gradient: 'from-cyan-600 to-blue-600'

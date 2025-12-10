@@ -157,6 +157,11 @@ impl PeerImageStore {
             .map(|(_, metadata)| metadata.clone())
             .collect()
     }
+    
+    /// Remove an image from the store
+    pub fn remove_image(&mut self, image_id: &str) {
+        self.images.remove(image_id);
+    }
 }
 
 // =============================================================================

@@ -1,13 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import { homeDir } from '@tauri-apps/api/path';
 import {
-  Wifi, User, Server, FolderOpen, X, Shield, Zap
+  Wifi, User, Server, X, Shield, Zap
 } from 'lucide-react';
 
 function ConnectionModal({ onClose, onConnect, loading, directoryServers }) {
   const [username, setUsername] = useState('');
   const [port, setPort] = useState(8001);
   const [imagesDir, setImagesDir] = useState('');
+
+  // Auto-detect home directory on mount
+  useEffect(() => {
+    const detectHomeDir = async () => {
+      try {
+        const home = await homeDir();
+        // Set fixed path: ~/Documents/Distributed_project
+        // homeDir() returns path with trailing slash, so we add Documents directly
+        const basePath = home.endsWith('/') ? home.slice(0, -1) : home;
+        setImagesDir(`${basePath}/Documents/Distributed_project`);
+      } catch (e) {
+        console.error('Failed to detect home directory:', e);
+        // Fallback
+        setImagesDir('/home/user/Documents/Distributed_project');
+      }
+    };
+    detectHomeDir();
+  }, []);
 
   const handleConnect = () => {
     if (username && port && imagesDir) {
@@ -57,7 +76,7 @@ function ConnectionModal({ onClose, onConnect, loading, directoryServers }) {
           {/* Username */}
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-2">
-              Username
+              Username (Linux username)
             </label>
             <div className="relative">
               <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -65,10 +84,13 @@ function ConnectionModal({ onClose, onConnect, loading, directoryServers }) {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter your username"
+                placeholder="Enter your Linux username"
                 className="w-full pl-12 pr-4 py-3 rounded-xl cyber-input text-white placeholder-gray-500"
               />
             </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Your system username (e.g., andrew, freddy)
+            </p>
           </div>
 
           {/* Port */}
@@ -88,26 +110,6 @@ function ConnectionModal({ onClose, onConnect, loading, directoryServers }) {
             </div>
             <p className="text-xs text-gray-500 mt-2">
               Port for P2P connections. Default: 8001
-            </p>
-          </div>
-
-          {/* Images Directory */}
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">
-              Images Directory
-            </label>
-            <div className="relative">
-              <FolderOpen className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                value={imagesDir}
-                onChange={(e) => setImagesDir(e.target.value)}
-                placeholder="Enter full path (e.g., /home/user/images)"
-                className="w-full pl-12 pr-4 py-3 rounded-xl cyber-input text-white placeholder-gray-500"
-              />
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              Enter the full path to your images folder
             </p>
           </div>
 

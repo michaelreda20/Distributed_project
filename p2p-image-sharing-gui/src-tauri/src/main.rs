@@ -1879,6 +1879,85 @@ async fn check_pending_permission_updates(
     }
 }
 
+#[tauri::command]
+async fn delete_image(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<ApiResponse<()>, String> {
+    let path = PathBuf::from(&file_path);
+    
+    // Verify the file exists
+    if !path.exists() {
+        return Ok(ApiResponse {
+            success: false,
+            message: format!("File not found: {}", file_path),
+            data: None,
+        });
+    }
+    
+    // Get images directory to make sure we're only deleting files within allowed directories
+    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone();
+    
+    let allowed = match &images_directory {
+        Some(base_dir) => {
+            // Allow deletion from: main dir, encrypted/, or received/
+            let encrypted_dir = base_dir.join("encrypted");
+            let received_dir = base_dir.join("received");
+            
+            path.starts_with(base_dir) || 
+            path.starts_with(&encrypted_dir) || 
+            path.starts_with(&received_dir)
+        }
+        None => false,
+    };
+    
+    if !allowed {
+        return Ok(ApiResponse {
+            success: false,
+            message: "Cannot delete files outside of your images directory".to_string(),
+            data: None,
+        });
+    }
+    
+    // Delete the file
+    match fs::remove_file(&path) {
+        Ok(_) => {
+            let file_name = path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            
+            eprintln!("✓ Deleted image: {}", file_path);
+            
+            // Also remove from local_images state if it exists there
+            if let Ok(mut local_images) = state.local_images.lock() {
+                local_images.retain(|img| img.file_path != file_path);
+            }
+            
+            // Remove from image_store if it's an encrypted image
+            let image_store = state.image_store.clone();
+            let image_id = file_name.to_string();
+            {
+                let mut store = image_store.write().await;
+                store.remove_image(&image_id);
+            }
+            
+            Ok(ApiResponse {
+                success: true,
+                message: format!("Image '{}' deleted successfully", file_name),
+                data: None,
+            })
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to delete image: {}", e);
+            Ok(ApiResponse {
+                success: false,
+                message: format!("Failed to delete image: {}", e),
+                data: None,
+            })
+        }
+    }
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
@@ -1908,6 +1987,7 @@ fn main() {
             list_peer_images_cmd,
             get_image_thumbnail,
             check_pending_permission_updates,
+            delete_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

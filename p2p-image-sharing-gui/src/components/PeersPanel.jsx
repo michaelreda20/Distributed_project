@@ -77,7 +77,7 @@ function PeersPanel({ peers, loading, onRefresh, onRequestImage, isOnline }) {
         <div>
           <h2 className="text-2xl font-display font-bold text-white flex items-center gap-3">
             <Users className="w-7 h-7 text-purple-400" />
-            Online Peers
+            Peers
           </h2>
           <p className="text-gray-400 mt-1">Discover and interact with peers on the network</p>
         </div>

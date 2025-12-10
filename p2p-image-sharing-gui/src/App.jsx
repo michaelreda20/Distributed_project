@@ -386,6 +386,27 @@ function App() {
     }
   };
 
+  const handleDeleteImage = async (imagePath, imageType) => {
+    try {
+      const response = await invoke('delete_image', { filePath: imagePath });
+      if (response.success) {
+        showToast(response.message, 'success');
+        // Refresh the appropriate image list based on type
+        if (imageType === 'local') {
+          await refreshImages();
+        } else if (imageType === 'encrypted') {
+          await fetchEncryptedImages();
+        } else if (imageType === 'received') {
+          await fetchReceivedImages();
+        }
+      } else {
+        showToast(response.message, 'error');
+      }
+    } catch (error) {
+      showToast(`Failed to delete image: ${error}`, 'error');
+    }
+  };
+
   // Render panel based on active tab
   const renderPanel = () => {
     switch (activeTab) {
@@ -422,6 +443,7 @@ function App() {
             onUpdatePermissions={handleUpdatePermissions}
             onRefresh={refreshImages}
             onViewImage={handleViewImage}
+            onDeleteImage={handleDeleteImage}
             loading={loading.images}
             isOnline={isOnline}
           />
