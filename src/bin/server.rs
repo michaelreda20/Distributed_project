@@ -715,7 +715,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 
 /// Configure TCP socket for large file transfers

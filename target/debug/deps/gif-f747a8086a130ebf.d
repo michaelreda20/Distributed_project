@@ -1,0 +1,12 @@
+D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\deps\gif-f747a8086a130ebf.d: C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\lib.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\traits.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\common.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\mod.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\decoder.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\converter.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\encoder.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\../README.md
+
+D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\deps\libgif-f747a8086a130ebf.rmeta: C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\lib.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\traits.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\common.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\mod.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\decoder.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\converter.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\encoder.rs C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\../README.md
+
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\lib.rs:
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\traits.rs:
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\common.rs:
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\mod.rs:
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\decoder.rs:
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\reader\converter.rs:
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\encoder.rs:
+C:\Users\Knzy\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.13.3\src\../README.md:

@@ -1,0 +1,176 @@
+   0.225684100s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="client"}: cargo::core::compiler::fingerprint: fingerprint error for cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project)/Check { test: false }/TargetInner { name: "client", doc: true, ..: with_path("D:\\AUC\\Fall 2025\\Distributed Systems\\Distributed_project\\src\\bin\\client.rs", Edition2021) }
+   0.225728400s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="client"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\.fingerprint\cloud_p2p_project-9333ba8769fcff8d\bin-client`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_path
+   6: git_filter_source_path
+   7: git_filter_source_path
+   8: git_filter_source_path
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.236066900s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="client"}: cargo::core::compiler::fingerprint: fingerprint error for cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project)/Check { test: true }/TargetInner { name: "client", doc: true, ..: with_path("D:\\AUC\\Fall 2025\\Distributed Systems\\Distributed_project\\src\\bin\\client.rs", Edition2021) }
+   0.236126200s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="client"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\.fingerprint\cloud_p2p_project-105ed3bb00403688\test-bin-client`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_path
+   6: git_filter_source_path
+   7: git_filter_source_path
+   8: git_filter_source_path
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.238728400s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_No_load_Balancing"}: cargo::core::compiler::fingerprint: fingerprint error for cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project)/Check { test: false }/TargetInner { name: "server_No_load_Balancing", doc: true, ..: with_path("D:\\AUC\\Fall 2025\\Distributed Systems\\Distributed_project\\src\\bin\\server_No_load_Balancing.rs", Edition2021) }
+   0.238758400s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_No_load_Balancing"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\.fingerprint\cloud_p2p_project-e0990e03aca43c9c\bin-server_No_load_Balancing`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_path
+   6: git_filter_source_path
+   7: git_filter_source_path
+   8: git_filter_source_path
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.239544800s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_No_load_Balancing"}: cargo::core::compiler::fingerprint: fingerprint error for cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project)/Check { test: true }/TargetInner { name: "server_No_load_Balancing", doc: true, ..: with_path("D:\\AUC\\Fall 2025\\Distributed Systems\\Distributed_project\\src\\bin\\server_No_load_Balancing.rs", Edition2021) }
+   0.239568700s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_No_load_Balancing"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\.fingerprint\cloud_p2p_project-695400f9e015eed1\test-bin-server_No_load_Balancing`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_path
+   6: git_filter_source_path
+   7: git_filter_source_path
+   8: git_filter_source_path
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.240293900s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_gui"}: cargo::core::compiler::fingerprint: fingerprint error for cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project)/Check { test: false }/TargetInner { name: "server_gui", doc: true, ..: with_path("D:\\AUC\\Fall 2025\\Distributed Systems\\Distributed_project\\src\\bin\\server_gui.rs", Edition2021) }
+   0.240313800s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_gui"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\.fingerprint\cloud_p2p_project-0b88fb769d87856a\bin-server_gui`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_path
+   6: git_filter_source_path
+   7: git_filter_source_path
+   8: git_filter_source_path
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.241012700s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_gui"}: cargo::core::compiler::fingerprint: fingerprint error for cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project)/Check { test: true }/TargetInner { name: "server_gui", doc: true, ..: with_path("D:\\AUC\\Fall 2025\\Distributed Systems\\Distributed_project\\src\\bin\\server_gui.rs", Edition2021) }
+   0.241032400s  INFO prepare_target{force=false package_id=cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project) target="server_gui"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\AUC\Fall 2025\Distributed Systems\Distributed_project\target\debug\.fingerprint\cloud_p2p_project-578c2f23a87d2193\test-bin-server_gui`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_path
+   6: git_filter_source_path
+   7: git_filter_source_path
+   8: git_filter_source_path
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+    Checking cloud_p2p_project v0.1.0 (D:\AUC\Fall 2025\Distributed Systems\Distributed_project)
+error: could not compile `cloud_p2p_project` (bin "server_No_load_Balancing" test) due to 1 previous error; 3 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `cloud_p2p_project` (bin "server_No_load_Balancing") due to 1 previous error; 3 warnings emitted
+error: could not compile `cloud_p2p_project` (bin "server_gui") due to 1 previous error; 2 warnings emitted
+error: could not compile `cloud_p2p_project` (bin "server_gui" test) due to 1 previous error; 2 warnings emitted
+error: could not compile `cloud_p2p_project` (bin "client") due to 10 previous errors; 1 warning emitted
+error: could not compile `cloud_p2p_project` (bin "client" test) due to 10 previous errors; 1 warning emitted
