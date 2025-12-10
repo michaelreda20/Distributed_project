@@ -800,87 +800,134 @@ async fn update_permissions(
     let username = state.username.lock().map_err(|e| e.to_string())?.clone()
         .ok_or("Not logged in")?;
     let dir_servers = state.directory_servers.lock().map_err(|e| e.to_string())?.clone();
-    let p2p_address = state.p2p_address.lock().map_err(|e| e.to_string())?.clone()
-        .ok_or("P2P server not running")?;
+    let images_directory = state.images_directory.lock().map_err(|e| e.to_string())?.clone()
+        .ok_or("Images directory not configured")?;
     
-    // First update permissions on our P2P server
-    let update_msg = P2PMessage::UpdatePermissions {
-        owner: username.clone(),
-        image_id: image_id.clone(),
+    // Find the encrypted image file
+    let encrypted_dir = images_directory.join("encrypted");
+    let image_path = encrypted_dir.join(&image_id);
+    
+    if !image_path.exists() {
+        return Ok(ApiResponse {
+            success: false,
+            message: format!("Encrypted image '{}' not found in {}", image_id, encrypted_dir.display()),
+            data: None,
+        });
+    }
+    
+    // Read and update the image permissions locally
+    let img_data = fs::read(&image_path).map_err(|e| format!("Failed to read image: {}", e))?;
+    let carrier_img = image::load_from_memory(&img_data).map_err(|e| format!("Failed to load image: {}", e))?;
+    
+    let payload = lsb::decode(&carrier_img)
+        .map_err(|e| format!("Failed to decode: {}", e))?
+        .ok_or("No hidden metadata found in image")?;
+    
+    let mut combined_data: CombinedPayload = bincode::deserialize(&payload)
+        .map_err(|e| format!("Failed to deserialize: {}", e))?;
+    
+    // Verify ownership
+    if combined_data.permissions.owner != username {
+        return Ok(ApiResponse {
+            success: false,
+            message: format!("You are not the owner of this image. Owner is: {}", combined_data.permissions.owner),
+            data: None,
+        });
+    }
+    
+    // Update the quota for target user
+    combined_data.permissions.quotas.insert(target_user.clone(), new_quota);
+    
+    // Re-encode and save the updated image
+    let updated_payload = bincode::serialize(&combined_data)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    let updated_carrier = lsb::encode(&carrier_img, &updated_payload)
+        .map_err(|e| format!("Failed to encode: {}", e))?;
+    updated_carrier.save(&image_path)
+        .map_err(|e| format!("Failed to save: {}", e))?;
+    
+    eprintln!("✓ Updated local image permissions: {} now has {} views for {}", target_user, new_quota, image_id);
+    
+    // Now create a copy of the image with the target user's quota embedded for delivery
+    // Read the freshly saved image to get the updated version
+    let updated_img_data = fs::read(&image_path).map_err(|e| format!("Failed to read updated image: {}", e))?;
+    
+    // Check if target user is online and deliver/store the update
+    let query_msg = DirectoryMessage::QueryUser {
         username: target_user.clone(),
-        new_quota,
     };
     
-    match send_p2p_message(&p2p_address, update_msg).await {
-        Ok(P2PMessage::UpdatePermissionsResponse { success: true, message }) => {
-            // Fetch the updated image to deliver (fetch as target_user so quota is embedded for them)
-            if let Ok(encrypted_image) = request_image_from_peer(&p2p_address, &target_user, &image_id, new_quota).await {
-                // Check if target user is online
-                let query_msg = DirectoryMessage::QueryUser {
-                    username: target_user.clone(),
+    match multicast_directory_message(&dir_servers, query_msg).await {
+        Ok(DirectoryMessage::QueryUserResponse { user: Some(target) }) => {
+            if target.status == UserStatus::Online {
+                eprintln!("📤 Target user {} is online, delivering updated image...", target_user);
+                // Deliver directly via P2P
+                let deliver_msg = P2PMessage::DeliverImage {
+                    from_owner: username.clone(),
+                    image_id: image_id.clone(),
+                    requested_views: new_quota,
+                    encrypted_image: updated_img_data.clone(),
                 };
-                
-                match multicast_directory_message(&dir_servers, query_msg).await {
-                    Ok(DirectoryMessage::QueryUserResponse { user: Some(target) }) => {
-                        if target.status == UserStatus::Online {
-                            // Deliver directly
-                            let deliver_msg = P2PMessage::DeliverImage {
-                                from_owner: username.clone(),
-                                image_id: image_id.clone(),
-                                requested_views: new_quota,
-                                encrypted_image,
-                            };
-                            let _ = send_p2p_message(&target.p2p_address, deliver_msg).await;
-                        } else {
-                            // Store for later
-                            let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
-                                from_owner: username.clone(),
-                                target_user: target_user.clone(),
-                                image_id: image_id.clone(),
-                                new_quota,
-                                embedded_image: Some(encrypted_image),
-                            };
-                            let _ = multicast_directory_message(&dir_servers, pending_msg).await;
-                        }
+                match send_p2p_message(&target.p2p_address, deliver_msg).await {
+                    Ok(P2PMessage::DeliverImageResponse { success: true, message }) => {
+                        eprintln!("✓ Image delivered: {}", message);
                     }
-                    _ => {
-                        // Store for later
+                    Ok(P2PMessage::DeliverImageResponse { success: false, message }) => {
+                        eprintln!("⚠ Delivery failed: {}, storing for later", message);
+                        // Fall back to storing
                         let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
                             from_owner: username.clone(),
                             target_user: target_user.clone(),
                             image_id: image_id.clone(),
                             new_quota,
-                            embedded_image: Some(encrypted_image),
+                            embedded_image: Some(updated_img_data.clone()),
                         };
                         let _ = multicast_directory_message(&dir_servers, pending_msg).await;
                     }
+                    Err(e) => {
+                        eprintln!("⚠ Delivery error: {}, storing for later", e);
+                        let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
+                            from_owner: username.clone(),
+                            target_user: target_user.clone(),
+                            image_id: image_id.clone(),
+                            new_quota,
+                            embedded_image: Some(updated_img_data.clone()),
+                        };
+                        let _ = multicast_directory_message(&dir_servers, pending_msg).await;
+                    }
+                    _ => {}
                 }
+            } else {
+                eprintln!("📥 Target user {} is offline, storing update for later delivery...", target_user);
+                let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
+                    from_owner: username.clone(),
+                    target_user: target_user.clone(),
+                    image_id: image_id.clone(),
+                    new_quota,
+                    embedded_image: Some(updated_img_data),
+                };
+                let _ = multicast_directory_message(&dir_servers, pending_msg).await;
             }
-            
-            Ok(ApiResponse {
-                success: true,
-                message,
-                data: None,
-            })
         }
-        Ok(P2PMessage::UpdatePermissionsResponse { success: false, message }) => {
-            Ok(ApiResponse {
-                success: false,
-                message,
-                data: None,
-            })
+        _ => {
+            eprintln!("📥 Target user {} not found, storing update for later delivery...", target_user);
+            let pending_msg = DirectoryMessage::StorePendingPermissionUpdate {
+                from_owner: username.clone(),
+                target_user: target_user.clone(),
+                image_id: image_id.clone(),
+                new_quota,
+                embedded_image: Some(updated_img_data),
+            };
+            let _ = multicast_directory_message(&dir_servers, pending_msg).await;
         }
-        Err(e) => Ok(ApiResponse {
-            success: false,
-            message: format!("Failed to update permissions: {}", e),
-            data: None,
-        }),
-        _ => Ok(ApiResponse {
-            success: false,
-            message: "Unexpected response".to_string(),
-            data: None,
-        }),
     }
+    
+    let action = if new_quota == 0 { "revoked" } else { "updated" };
+    Ok(ApiResponse {
+        success: true,
+        message: format!("Permissions {} for {}. They now have {} views.", action, target_user, new_quota),
+        data: None,
+    })
 }
 
 #[tauri::command]

@@ -471,8 +471,22 @@ function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, 
                       <span className="text-white font-mono w-8 text-center">{newQuota}</span>
                     </div>
                   </div>
-                  <p className="text-xs text-gray-500 mt-2">
-                    Set to 0 to revoke access
+                  {newQuota === 0 ? (
+                    <p className="text-xs text-red-400 mt-2">
+                      ⚠️ Setting quota to 0 will REVOKE access for this user
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Set to 0 to revoke access
+                    </p>
+                  )}
+                </div>
+
+                {/* Info about multicast */}
+                <div className="p-3 rounded-lg bg-cyan-900/20 border border-cyan-500/20">
+                  <p className="text-xs text-cyan-400">
+                    📡 This update will be multicast to all directory servers and delivered to the user
+                    {targetUser ? ` "${targetUser}"` : ''}.
                   </p>
                 </div>
               </div>
@@ -489,9 +503,13 @@ function ImagesPanel({ localImages, receivedImages, encryptedImages, onEncrypt, 
                   whileTap={{ scale: 0.98 }}
                   onClick={handleUpdatePermissions}
                   disabled={!targetUser}
-                  className="flex-1 px-4 py-3 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 text-white font-medium disabled:opacity-50"
+                  className={`flex-1 px-4 py-3 rounded-lg text-white font-medium disabled:opacity-50 ${
+                    newQuota === 0 
+                      ? 'bg-gradient-to-r from-red-600 to-orange-600' 
+                      : 'bg-gradient-to-r from-purple-600 to-pink-600'
+                  }`}
                 >
-                  Update
+                  {newQuota === 0 ? 'Revoke Access' : 'Update & Send'}
                 </motion.button>
               </div>
             </motion.div>
