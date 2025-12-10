@@ -399,6 +399,13 @@ impl DirectoryServiceState {
             
             drop(users);
             
+            // Clear all notifications for this user (accepted/rejected requests they made)
+            self.clear_notifications_for_user(username).await;
+            
+            // Optionally: Also clear pending requests TO this user that they haven't responded to
+            // This prevents stale requests from accumulating
+            self.clear_pending_requests_to_user(username).await;
+            
             let _ = self.save_to_disk().await;
             self.replicate_state().await;
             
@@ -643,6 +650,51 @@ impl DirectoryServiceState {
             })
             .cloned()
             .collect()
+    }
+
+    /// Clear all notifications for a user (called when user goes offline)
+    pub async fn clear_notifications_for_user(&self, username: &str) {
+        let mut requests = self.pending_requests.write().await;
+        
+        // Collect request IDs to remove (notifications are requests from this user that have been accepted/rejected)
+        let to_remove: Vec<String> = requests
+            .iter()
+            .filter(|(_, r)| {
+                r.from_user == username
+                    && (r.status == RequestStatus::Accepted || r.status == RequestStatus::Rejected)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        
+        let count = to_remove.len();
+        for id in to_remove {
+            requests.remove(&id);
+        }
+        
+        if count > 0 {
+            info!("[{}] Cleared {} notifications for user {}", self.server_id, count, username);
+        }
+    }
+
+    /// Clear all pending requests TO a user (requests they haven't responded to yet)
+    pub async fn clear_pending_requests_to_user(&self, username: &str) {
+        let mut requests = self.pending_requests.write().await;
+        
+        // Remove pending requests where this user is the target (to_user)
+        let to_remove: Vec<String> = requests
+            .iter()
+            .filter(|(_, r)| r.to_user == username && r.status == RequestStatus::Pending)
+            .map(|(id, _)| id.clone())
+            .collect();
+        
+        let count = to_remove.len();
+        for id in to_remove {
+            requests.remove(&id);
+        }
+        
+        if count > 0 {
+            info!("[{}] Cleared {} pending requests to user {}", self.server_id, count, username);
+        }
     }
 
     /// Store a pending permission update for an offline user
