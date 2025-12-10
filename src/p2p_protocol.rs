@@ -80,6 +80,19 @@ pub enum P2PMessage {
         success: bool,
         message: String,
     },
+
+    /// Request a low-resolution thumbnail preview of an image
+    ThumbnailRequest {
+        requesting_user: String,
+        image_id: String,
+    },
+
+    /// Response with low-resolution thumbnail
+    ThumbnailResponse {
+        success: bool,
+        message: String,
+        thumbnail: Option<Vec<u8>>, // Low-res blurred preview as PNG bytes
+    },
 }
 
 /// Metadata about an available image
@@ -435,6 +448,16 @@ async fn handle_p2p_request(
             }
         }
 
+        P2PMessage::ThumbnailRequest {
+            requesting_user,
+            image_id,
+        } => {
+            info!("Thumbnail request from {} for {}", requesting_user, image_id);
+            println!("[INFO] Thumbnail request from {} for {}", requesting_user, image_id);
+
+            handle_thumbnail_request(&image_id, &image_store).await
+        }
+
         _ => {
             bail!("Unexpected P2P message type");
         }
@@ -745,6 +768,122 @@ async fn handle_update_permissions(
     }
 }
 
+/// Handle a thumbnail request - return a low-resolution blurred preview
+async fn handle_thumbnail_request(
+    image_id: &str,
+    image_store: &std::sync::Arc<tokio::sync::RwLock<PeerImageStore>>,
+) -> P2PMessage {
+    use crate::lsb;
+    use crate::CombinedPayload;
+    use image::imageops;
+    use std::io::Cursor;
+
+    // Get the image path
+    let image_path = {
+        let store = image_store.read().await;
+        match store.get_image_path(image_id) {
+            Some(path) => path.clone(),
+            None => {
+                return P2PMessage::ThumbnailResponse {
+                    success: false,
+                    message: format!("Image {} not found", image_id),
+                    thumbnail: None,
+                };
+            }
+        }
+    };
+
+    // Read the encrypted image
+    let encrypted_data = match fs::read(&image_path) {
+        Ok(data) => data,
+        Err(e) => {
+            return P2PMessage::ThumbnailResponse {
+                success: false,
+                message: format!("Failed to read image: {}", e),
+                thumbnail: None,
+            };
+        }
+    };
+
+    // Load the image
+    let carrier_img = match image::load_from_memory(&encrypted_data) {
+        Ok(img) => img,
+        Err(e) => {
+            return P2PMessage::ThumbnailResponse {
+                success: false,
+                message: format!("Failed to load image: {}", e),
+                thumbnail: None,
+            };
+        }
+    };
+
+    // Decode embedded payload to get the actual image
+    let payload = match lsb::decode(&carrier_img) {
+        Ok(Some(data)) => data,
+        Ok(None) => {
+            return P2PMessage::ThumbnailResponse {
+                success: false,
+                message: "No embedded data found".to_string(),
+                thumbnail: None,
+            };
+        }
+        Err(e) => {
+            return P2PMessage::ThumbnailResponse {
+                success: false,
+                message: format!("Failed to decode: {}", e),
+                thumbnail: None,
+            };
+        }
+    };
+
+    let combined_data: CombinedPayload = match bincode::deserialize(&payload) {
+        Ok(data) => data,
+        Err(e) => {
+            return P2PMessage::ThumbnailResponse {
+                success: false,
+                message: format!("Failed to deserialize: {}", e),
+                thumbnail: None,
+            };
+        }
+    };
+
+    // Load the unified image from the payload
+    let actual_img = match image::load_from_memory(&combined_data.unified_image) {
+        Ok(img) => img,
+        Err(e) => {
+            return P2PMessage::ThumbnailResponse {
+                success: false,
+                message: format!("Failed to load embedded image: {}", e),
+                thumbnail: None,
+            };
+        }
+    };
+
+    // Create a low-resolution thumbnail (150x150) with blur
+    let thumbnail = actual_img.resize(150, 150, imageops::FilterType::Lanczos3);
+    // Apply heavy blur to make it a preview only (sigma=8.0)
+    let blurred = imageops::blur(&thumbnail, 8.0);
+
+    // Convert to PNG bytes
+    let mut thumb_buf = Cursor::new(Vec::new());
+    if let Err(e) = blurred.write_to(&mut thumb_buf, image::ImageFormat::Png) {
+        return P2PMessage::ThumbnailResponse {
+            success: false,
+            message: format!("Failed to encode thumbnail: {}", e),
+            thumbnail: None,
+        };
+    }
+
+    info!("Generated thumbnail for {} ({}x{} blurred)", image_id, 150, 150);
+    println!("[INFO] Generated thumbnail for {}", image_id);
+
+    P2PMessage::ThumbnailResponse {
+        success: true,
+        message: "Thumbnail generated".to_string(),
+        thumbnail: Some(thumb_buf.into_inner()),
+    }
+}
+
 /// Update permissions in a local image file (used for remote permission updates)
 fn update_local_image_permissions(
     image_path: &PathBuf,
@@ -857,6 +996,34 @@ pub async fn list_peer_images(peer_addr: &str, requesting_user: &str) -> Result<
     
     match response {
         P2PMessage::ListImagesResponse { images } => Ok(images),
+        _ => bail!("Unexpected response type"),
+    }
+}
+
+/// Request a low-resolution thumbnail preview from a peer
+pub async fn request_thumbnail_from_peer(
+    peer_addr: &str,
+    requesting_user: &str,
+    image_id: &str,
+) -> Result<Vec<u8>> {
+    let message = P2PMessage::ThumbnailRequest {
+        requesting_user: requesting_user.to_string(),
+        image_id: image_id.to_string(),
+    };
+    
+    let response = send_p2p_message(peer_addr, message).await?;
+    
+    match response {
+        P2PMessage::ThumbnailResponse {
+            success: true,
+            thumbnail: Some(data),
+            ..
+        } => Ok(data),
+        P2PMessage::ThumbnailResponse {
+            success: false,
+            message,
+            ..
+        } => bail!("Thumbnail request failed: {}", message),
         _ => bail!("Unexpected response type"),
     }
 }

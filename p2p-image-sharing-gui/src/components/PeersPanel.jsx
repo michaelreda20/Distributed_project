@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { invoke } from '@tauri-apps/api/core';
 import {
   Users, RefreshCw, Search, Image, Send, Eye, Clock,
-  ChevronDown, ChevronUp, Globe, Wifi, WifiOff
+  ChevronDown, ChevronUp, Globe, Wifi, WifiOff, Loader
 } from 'lucide-react';
 
 function PeersPanel({ peers, loading, onRefresh, onRequestImage, isOnline }) {
@@ -10,6 +11,37 @@ function PeersPanel({ peers, loading, onRefresh, onRequestImage, isOnline }) {
   const [expandedPeer, setExpandedPeer] = useState(null);
   const [requestModal, setRequestModal] = useState(null);
   const [requestViews, setRequestViews] = useState(5);
+  const [thumbnails, setThumbnails] = useState({}); // { "peer_imageId": dataUrl }
+  const [loadingThumbnails, setLoadingThumbnails] = useState({}); // { "peer_imageId": true/false }
+
+  // Fetch thumbnails when peer is expanded
+  useEffect(() => {
+    if (expandedPeer) {
+      const peer = peers.find(p => p.username === expandedPeer);
+      if (peer && peer.shared_images && peer.status === 'Online') {
+        peer.shared_images.forEach(async (image) => {
+          const key = `${peer.username}_${image.image_id}`;
+          // Only fetch if we don't have it and aren't already loading it
+          if (!thumbnails[key] && !loadingThumbnails[key]) {
+            setLoadingThumbnails(prev => ({ ...prev, [key]: true }));
+            try {
+              const result = await invoke('get_image_thumbnail', {
+                peerUsername: peer.username,
+                imageId: image.image_id
+              });
+              if (result.success && result.data) {
+                setThumbnails(prev => ({ ...prev, [key]: result.data }));
+              }
+            } catch (e) {
+              console.error('Failed to fetch thumbnail:', e);
+            } finally {
+              setLoadingThumbnails(prev => ({ ...prev, [key]: false }));
+            }
+          }
+        });
+      }
+    }
+  }, [expandedPeer, peers]);
 
   const filteredPeers = peers.filter(peer =>
     peer.username.toLowerCase().includes(searchTerm.toLowerCase())
@@ -148,36 +180,71 @@ function PeersPanel({ peers, loading, onRefresh, onRequestImage, isOnline }) {
                     <div className="p-4">
                       <h4 className="text-sm font-medium text-gray-400 mb-3">Shared Images</h4>
                       {peer.shared_images && peer.shared_images.length > 0 ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                          {peer.shared_images.map((image) => (
-                            <div
-                              key={image.image_id}
-                              className="p-3 rounded-lg bg-white/5 border border-purple-900/20 flex items-center justify-between"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-lg bg-purple-600/20 flex items-center justify-center">
-                                  <Image className="w-5 h-5 text-purple-400" />
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {peer.shared_images.map((image) => {
+                            const thumbnailKey = `${peer.username}_${image.image_id}`;
+                            const thumbnail = thumbnails[thumbnailKey];
+                            const isLoadingThumb = loadingThumbnails[thumbnailKey];
+                            
+                            return (
+                              <div
+                                key={image.image_id}
+                                className="rounded-xl bg-white/5 border border-purple-900/30 overflow-hidden hover:border-purple-500/50 transition-all"
+                              >
+                                {/* Thumbnail Preview */}
+                                <div className="relative w-full h-32 bg-gradient-to-br from-purple-900/20 to-pink-900/20 flex items-center justify-center">
+                                  {isLoadingThumb ? (
+                                    <Loader className="w-8 h-8 text-purple-400 animate-spin" />
+                                  ) : thumbnail ? (
+                                    <img 
+                                      src={thumbnail} 
+                                      alt={image.image_name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  ) : (
+                                    <div className="flex flex-col items-center gap-2">
+                                      <Image className="w-10 h-10 text-purple-400/50" />
+                                      <span className="text-xs text-gray-500">Preview unavailable</span>
+                                    </div>
+                                  )}
+                                  {/* Blurred overlay indicator */}
+                                  {thumbnail && (
+                                    <div className="absolute bottom-2 right-2 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm">
+                                      <span className="text-xs text-gray-300">Preview</span>
+                                    </div>
+                                  )}
                                 </div>
-                                <div>
-                                  <p className="text-sm font-medium text-white truncate max-w-[120px]">
-                                    {image.image_name}
-                                  </p>
-                                  <p className="text-xs text-gray-500">ID: {image.image_id.slice(0, 8)}...</p>
+                                
+                                {/* Image info and request button */}
+                                <div className="p-3 flex items-center justify-between">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-white truncate">
+                                      {image.image_name}
+                                    </p>
+                                    <p className="text-xs text-gray-500 truncate">
+                                      ID: {image.image_id.slice(0, 12)}...
+                                    </p>
+                                  </div>
+                                  <motion.button
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.95 }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setRequestModal({ 
+                                        peer: peer.username, 
+                                        imageId: image.image_id, 
+                                        imageName: image.image_name,
+                                        thumbnail: thumbnail 
+                                      });
+                                    }}
+                                    className="ml-2 p-2 rounded-lg bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 transition-colors flex items-center gap-1"
+                                  >
+                                    <Send className="w-4 h-4" />
+                                  </motion.button>
                                 </div>
                               </div>
-                              <motion.button
-                                whileHover={{ scale: 1.05 }}
-                                whileTap={{ scale: 0.95 }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setRequestModal({ peer: peer.username, imageId: image.image_id, imageName: image.image_name });
-                                }}
-                                className="p-2 rounded-lg bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 transition-colors"
-                              >
-                                <Send className="w-4 h-4" />
-                              </motion.button>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-sm text-gray-500">No images shared</p>
@@ -211,6 +278,20 @@ function PeersPanel({ peers, loading, onRefresh, onRequestImage, isOnline }) {
               <h3 className="text-xl font-display font-bold text-white mb-4">Request Image</h3>
               
               <div className="space-y-4">
+                {/* Thumbnail preview in modal */}
+                {requestModal.thumbnail && (
+                  <div className="relative w-full h-40 rounded-lg overflow-hidden bg-gradient-to-br from-purple-900/20 to-pink-900/20">
+                    <img 
+                      src={requestModal.thumbnail} 
+                      alt={requestModal.imageName}
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute bottom-2 right-2 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm">
+                      <span className="text-xs text-gray-300">Blurred Preview</span>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="p-4 rounded-lg bg-white/5 border border-purple-900/20">
                   <p className="text-sm text-gray-400">From</p>
                   <p className="text-white font-medium">{requestModal.peer}</p>
