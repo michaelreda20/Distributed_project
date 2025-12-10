@@ -1386,7 +1386,7 @@ async fn encrypt_image(
     
     // Load servers.conf from the main project directory
     let servers_content = fs::read_to_string("/home/michael12@auc.egy/Documents/Distributed_project/servers.conf")
-        .unwrap_or_else(|_| "10.7.57.239:8080\n10.7.57.240:8080\n10.7.57.99:8080".to_string());
+        .unwrap_or_else(|_| "10.7.57.239:8080\n10.7.57.240:8081\n10.7.57.99:8082".to_string());
     
     let servers: Vec<String> = servers_content
         .lines()
